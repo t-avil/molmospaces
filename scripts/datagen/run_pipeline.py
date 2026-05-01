@@ -45,6 +45,7 @@ from molmo_spaces.configs.robot_configs import (
     FloatingRUMRobotConfig,
     FrankaRobotConfig,
     I2rtYamRobotConfig,
+    MobileFrankaRobotConfig,
     RBY1Config,
     ActionNoiseConfig,
 )
@@ -234,6 +235,13 @@ def setup_config(args: argparse.ArgumentParser) -> MlSpacesExpConfig:
     elif robot == "bimanual_yam":
         datagen_cfg.robot_config = BimanualYamRobotConfig()
         datagen_cfg.camera_config = BimanualYamCameraSystem()
+    elif robot == "mobile_franka":
+        datagen_cfg.robot_config = MobileFrankaRobotConfig()
+        datagen_cfg.camera_config = FrankaDroidCameraSystem()
+        datagen_cfg.camera_config.img_resolution = (1280, 720)
+        datagen_cfg.task_sampler_config.base_pose_sampling_radius_range = (0.5, 3.0)
+        datagen_cfg.task_sampler_config.robot_safety_radius = 0.4
+        datagen_cfg.policy_config.phase_timeout = 20.0
     else:
         raise ValueError
 
@@ -334,7 +342,7 @@ if __name__ == "__main__":
     args.add_argument("--config", type=str, default=None, help="Load a fixed config")
     args.add_argument("--viewer", action="store_true", help="single step")
     args.add_argument(
-        "--robot", type=str, default="droid", help="franka, droid, rum, rby1, yam, or bimanual_yam"
+        "--robot", type=str, default="droid", help="franka, droid, rum, rby1, yam, bimanual_yam, or mobile_franka"
     )
     args.add_argument(
         "--policy",
