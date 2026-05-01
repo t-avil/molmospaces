@@ -17,6 +17,7 @@ recreate the episode are in the JSON, and if the field is present it strictly ov
 
 import importlib
 import logging
+import os
 import types
 from pathlib import Path
 
@@ -568,6 +569,14 @@ class JsonEvalTaskSampler(BaseMujocoTaskSampler):
         # (e.g. grasp_collision_* for the scripted planner). Mirrors what
         # PickTaskSampler.add_auxiliary_objects does for the datagen path.
         self.config.policy_config.policy_cls.add_auxiliary_objects(self.config, spec)
+
+        # Optional: dump the fully-compiled scene MJCF to disk for inspection in
+        # mujoco.viewer. Set MLSPACES_DUMP_COMPILED_MJCF=/path/to/out.xml.
+        dump_path = os.environ.get("MLSPACES_DUMP_COMPILED_MJCF")
+        if dump_path:
+            with open(dump_path, "w") as f:
+                f.write(spec.to_xml())
+            log.info(f"[dump] Wrote compiled MJCF to {dump_path}")
 
     def randomize_scene(self, env: CPUMujocoEnv, robot_view) -> None:
         """
