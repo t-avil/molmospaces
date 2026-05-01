@@ -350,6 +350,26 @@ class BaseObjectManipulationPlannerPolicy(PlannerPolicy):
     def planners(self):
         return {}
 
+    def _snap_to_original_base_pose(self) -> None:
+        """For mobile bases: teleport the planar joint back to the benchmark-authored
+        ("original") robot_base_pose stashed by JsonEvalTaskSampler. No-op when
+        the env doesn't carry an original (static-base or non-perturbed runs).
+
+        This is the "move to original location" workaround for mobile manipulation
+        with a fixed-base IK solver: the policy snaps the base into a known pose
+        before computing IK, so the rest of the scripted manipulation can proceed
+        unchanged.
+        """
+        from molmo_spaces.utils.pose import pos_quat_to_pose_mat
+
+        env = self.task.env
+        original = getattr(env, "original_robot_base_pose", None)
+        if original is None:
+            return
+        pose_m = pos_quat_to_pose_mat(original[:3], original[3:7])
+        env.current_robot.robot_view.base.pose = pose_m
+        mujoco.mj_forward(env.current_model, env.current_data)
+
     def get_all_phases(self):
         phases = super().get_all_phases()
         # Collect all possible phases here, even those not used for a particular trajectory computation
@@ -376,6 +396,7 @@ class BaseObjectManipulationPlannerPolicy(PlannerPolicy):
             self.ik_warmed_up = True
             log.info(f"Warmed up parallel IK solver in {warmup_time.value:.3f}s")
 
+        self._snap_to_original_base_pose()
         self.action_primitives = self._compute_trajectory()
 
         self.action_idx = 0
