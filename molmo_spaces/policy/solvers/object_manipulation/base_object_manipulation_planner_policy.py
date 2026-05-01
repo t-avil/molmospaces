@@ -496,7 +496,11 @@ class BaseObjectManipulationPlannerPolicy(PlannerPolicy):
         kinematics = self.task.env.current_robot.kinematics
 
         gripper_mgs = set(self.robot_view.get_gripper_movegroup_ids())
-        mgs_except_gripper = [x for x in self.robot_view.move_group_ids() if x not in gripper_mgs]
+        # Lock the base move group so per-step IK never moves the planar base
+        # away from the snapped-original pose. For static robots the base group
+        # has 0 joints, so excluding it is a no-op.
+        excluded = gripper_mgs | {"base"}
+        mgs_except_gripper = [x for x in self.robot_view.move_group_ids() if x not in excluded]
 
         jp = kinematics.ik(
             mg_id,
@@ -535,9 +539,24 @@ class BaseObjectManipulationPlannerPolicy(PlannerPolicy):
 
             robot_view = self.task.env.current_robot.robot_view
             parallel_kinematics = self.task._env.robots[0].parallel_kinematics
+            # parallel_kinematics may be configured with a fixed-base chain
+            # (mobile_franka uses FrankaParallelKinematics with FrankaRobotConfig);
+            # its internal "base" move group has 0 joints while the mobile
+            # robot's "base" group has 3. Drop entries whose joint count doesn't
+            # match the parallel_kinematics chain. The mobile base transform is
+            # conveyed separately via the base_pose argument.
+            pk_view = parallel_kinematics._robot_view
+            qpos_dict = {}
+            for k, v in robot_view.get_qpos_dict().items():
+                if k not in pk_view.move_group_ids():
+                    continue
+                pk_size = len(pk_view.get_move_group(k)._joint_posadr)
+                if pk_size != len(v):
+                    continue
+                qpos_dict[k] = v
             jp_dicts = parallel_kinematics.ik(
                 pose,
-                robot_view.get_qpos_dict(),
+                qpos_dict,
                 robot_view.base.pose,
                 rel_to_base=False,
                 posture_weight=0.0,
