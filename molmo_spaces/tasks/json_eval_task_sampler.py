@@ -564,6 +564,11 @@ class JsonEvalTaskSampler(BaseMujocoTaskSampler):
 
         self._metadata_adder.update(name_to_meta)
 
+        # Let the policy class register any scene-level auxiliary bodies it needs
+        # (e.g. grasp_collision_* for the scripted planner). Mirrors what
+        # PickTaskSampler.add_auxiliary_objects does for the datagen path.
+        self.config.policy_config.policy_cls.add_auxiliary_objects(self.config, spec)
+
     def randomize_scene(self, env: CPUMujocoEnv, robot_view) -> None:
         """
         Set up scene state from episode spec.
