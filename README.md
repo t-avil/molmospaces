@@ -286,6 +286,7 @@ pybind11-stubgen mujoco -o ./typings/
 1. Documentation for the viewer can be found [here](https://mujoco.readthedocs.io/en/stable/programming/samples.html#sasimulate), there are many keyboard shortcuts.
 2. If you have red boxes on top of your objects, go to the left panel and toggle `Group Enable > Site groups >  Site 0`
 3. Interact with objects by double-clicking > Ctrl + right mouse drag. (only with active viewers, not passive ones)
+4. **Note (macOS):** the pinned `mujoco==3.4.0` viewer is broken on macOS 26+. Use a separate venv with `mujoco==3.7.0` and a shared-libpython Python for viewer launches.
 
 
 ## Robot Conventions
