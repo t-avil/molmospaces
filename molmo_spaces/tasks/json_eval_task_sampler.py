@@ -641,9 +641,17 @@ class JsonEvalTaskSampler(BaseMujocoTaskSampler):
         mujoco.mj_forward(model, data)
         self.set_joint_values(env)
 
-        # Set robot joint positions from episode spec
+        # Set robot joint positions from episode spec. Some benchmarks were
+        # authored for a fixed-base franka and supply an empty `base` qpos;
+        # for mobile robots whose actual base move group has joints, fall
+        # back to zeros so the assignment shape matches.
         for group_name, qpos in self.episode_spec.robot.init_qpos.items():
-            robot_view.get_move_group(group_name).joint_pos = np.array(qpos)
+            mg = robot_view.get_move_group(group_name)
+            qpos_arr = np.array(qpos)
+            expected = len(mg._joint_posadr)
+            if qpos_arr.size == 0 and expected > 0:
+                qpos_arr = np.zeros(expected)
+            mg.joint_pos = qpos_arr
         mujoco.mj_forward(model, data)
 
         for robot in env.robots:

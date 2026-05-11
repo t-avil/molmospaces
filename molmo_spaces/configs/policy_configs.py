@@ -139,6 +139,20 @@ class PickPlannerPolicyConfig(ObjectManipulationPlannerPolicyConfig):
             self.policy_cls = PickPlannerPolicy
 
 
+class NavToOriginalBasePolicyConfig(BasePolicyConfig):
+    policy_cls: type = None
+    policy_type: str = "nav_to_original"
+
+    def model_post_init(self, __context) -> None:
+        super().model_post_init(__context)
+        if self.policy_cls is None:
+            from molmo_spaces.policy.solvers.navigation.nav_to_original_policy import (
+                NavToOriginalBasePolicy,
+            )
+
+            self.policy_cls = NavToOriginalBasePolicy
+
+
 class PickAndPlacePlannerPolicyConfig(ObjectManipulationPlannerPolicyConfig):
     policy_cls: type = None  # Will be set in model_post_init to avoid circular imports
     move_settle_time: float = 0.5

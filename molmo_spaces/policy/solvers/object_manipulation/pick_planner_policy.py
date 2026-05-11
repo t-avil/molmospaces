@@ -1,4 +1,5 @@
 import logging
+import os
 
 import numpy as np
 
@@ -17,9 +18,24 @@ log = logging.getLogger(__name__)
 
 
 class PickPlannerPolicy(BaseObjectManipulationPlannerPolicy):
+    def reset(self, reset_retries: bool = True):
+        super().reset(reset_retries=reset_retries)
+        # Demo soft-IK-fail: base.reset() rebuilds self.target_poses from
+        # action_primitives (here a single GripperAction → empty dict). Sensors
+        # require pregrasp/grasp/lift entries; inject the placeholders saved
+        # in _compute_trajectory so the rollout can still render frames.
+        if getattr(self, "_demo_ik_failed", False):
+            self.target_poses.update(self._demo_target_poses)
+
     def _compute_trajectory(self) -> list[ActionPrimitive]:
         robot_view = self.task.env.current_robot.robot_view
+        self._demo_ik_failed = False
+        self._demo_target_poses: dict[str, np.ndarray] = {}
         target_poses = self._compute_target_poses()
+        if self._demo_ik_failed:
+            # Demo: keep arm idle so eval still renders frames + saves mp4.
+            self._demo_target_poses = dict(target_poses)
+            return [GripperAction(robot_view, True, 0.0)]
 
         gripper_mg_id = robot_view.get_gripper_movegroup_ids()[0]
         start_ee_pose = robot_view.get_move_group(gripper_mg_id).leaf_frame_to_world
@@ -126,6 +142,22 @@ class PickPlannerPolicy(BaseObjectManipulationPlannerPolicy):
             log.debug(
                 f"  - Height difference: {pregrasp_pose[2, 3] - robot_view.base.pose[2, 3]:.3f}m"
             )
+            if os.environ.get("MLSPACES_DEMO_SOFT_IK_FAIL"):
+                log.warning(
+                    "[DEMO] IK failed for pregrasp pose; continuing with empty "
+                    "trajectory so frames render. Position: %s, robot base: %s",
+                    pregrasp_pose[:3, 3],
+                    robot_view.base.pose[:3, 3],
+                )
+                target_poses["pregrasp"] = pregrasp_pose
+                # Sensors expect grasp + lift entries; stuff placeholders so
+                # the rollout can still render frames.
+                target_poses["grasp"] = grasp_pose_world
+                lift_pose = grasp_pose_world.copy()
+                lift_pose[2, 3] += 0.1
+                target_poses["lift"] = lift_pose
+                self._demo_ik_failed = True
+                return target_poses
             raise ValueError("IK failed for pregrasp pose")
 
         target_poses["pregrasp"] = pregrasp_pose

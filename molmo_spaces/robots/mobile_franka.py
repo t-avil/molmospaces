@@ -186,18 +186,15 @@ class MobileFrankaRobot(Robot):
         robot_body.add_site(name=f"{prefix}base_site", pos=[0, 0, 0], quat=[1, 0, 0, 0])
         base_height = robot_config.base_size[2]
 
-        # Add base geometry (wooden platform). contype=0/conaffinity=0 disables
-        # collisions on the base box: the mobile base is rendered for visual
-        # reference and kept out of the contact graph so it cannot snag on
-        # walls/objects when the planar joint moves the robot through the scene.
+        # Add base geometry (wooden platform). Contacts re-enabled — the
+        # NavToOriginalBasePolicy now searches for a collision-free pose
+        # around the benchmark-authored target.
         robot_body.add_geom(
             type=mjtGeom.mjGEOM_BOX,
             size=[x / 2 for x in robot_config.base_size],
             pos=[0, 0, base_height / 2],
             material=material_name,
             group=0,  # Visual group
-            contype=0,
-            conaffinity=0,
         )
         attach_frame = robot_body.add_frame(pos=[0, 0, base_height])
 
