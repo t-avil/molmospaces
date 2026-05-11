@@ -3,7 +3,7 @@
   <img src="docs/images/MolmoSpacesLogo.png" alt="MolmoSpaces Logo" width="800" style="margin-left:'auto' margin-right:'auto' display:'block'"/></br>
   A Large-Scale Open Ecosystem for Robot Manipulation and Navigation
   <div align="center">
-    <a href="http://allenai.org/papers/molmospaces" target="_blank" rel="noopener noreferrer"><img alt="Paper" src="./docs/images/button_paper.svg"/></a>&nbsp;&nbsp;<a href="https://huggingface.co/datasets/allenai/molmospaces" target="_blank" rel="noopener noreferrer"><img alt="Data" src="./docs/images/button_data.svg"/></a>&nbsp;&nbsp;<a href="https://molmospaces.allen.ai/" target="_blank" rel="noopener noreferrer"><img alt="Demo" src="./docs/images/button_demo.svg"/></a>&nbsp;&nbsp;<a href="https://molmospaces.allen.ai/leaderboard" target="_blank" rel="noopener noreferrer"><img alt="Leaderboard" src="./docs/images/button_leaderboard.svg"/></a>
+    <a href="https://arxiv.org/pdf/2602.11337" target="_blank" rel="noopener noreferrer"><img alt="Paper" src="./docs/images/button_paper.svg"/></a>&nbsp;&nbsp;<a href="https://huggingface.co/datasets/allenai/molmospaces" target="_blank" rel="noopener noreferrer"><img alt="Data" src="./docs/images/button_data.svg"/></a>&nbsp;&nbsp;<a href="https://molmospaces.allen.ai/" target="_blank" rel="noopener noreferrer"><img alt="Demo" src="./docs/images/button_demo.svg"/></a>&nbsp;&nbsp;<a href="https://molmospaces.allen.ai/leaderboard" target="_blank" rel="noopener noreferrer"><img alt="Leaderboard" src="./docs/images/button_leaderboard.svg"/></a>
   </div>
   </br>
   &</br>
@@ -39,24 +39,34 @@
 
 Installing `molmospaces` is easy!
 
-First, set up a conda environment with Python 3.11:
-
-```bash
-conda create -n mlspaces python=3.11
-conda activate mlspaces
-```
-
-
-Then, clone and install the project:
+First, clone the project. 
 
 ```bash
 git clone git@github.com:allenai/molmospaces.git
 cd molmospaces
 ```
 
+Then, set up the virtual environment and install.
+
+> Note: If you want to use the debug viewer on macOS you need to use conda or a Homebrew Python. This is because `mjpython` used by the debug viewer requires a shared `libpython3.11.dylib`, which `uv`'s standalone CPython does not ship.
+
+
+With conda:
+
 ```bash
+conda create -n mlspaces python=3.11
+conda activate mlspaces
 pip install -e ".[mujoco]"
 ```
+
+Or with `uv`:
+
+```bash
+uv venv --python 3.11 .venv
+source .venv/bin/activate
+uv pip install -e ".[mujoco]"
+```
+
 One of the following options must be provided:
 - `mujoco` to use the classic MuJoCo renderer
 - `mujoco-filament` to use the improved Filament renderer for MuJoCo
@@ -116,14 +126,14 @@ Environment variables beginning with the `MLSPACES` prefix can be used to custom
 
 | Environment Variable | Effect | Default |
 |---|---|---|
-| `MLSPACES_ASSETS_DIR` | Where to place downloaded assets | `../assets` relative to `molmo-spaces` directory |
+| `MLSPACES_ASSETS_DIR` | Where to place downloaded assets | `~/.cache/molmospaces/assets/<install-hash>` |
 | `MLSPACES_FORCE_INSTALL` | Override existing assets | `True` |
 | `MLSPACES_PINNED_ASSETS_FILE` | A `.json` file containing pinned versions for each asset, used to override the versions specified in [molmo_spaces_constants.py](molmo_spaces/molmo_spaces_constants.py). |  |
 
 
 ### Quick Test
 
-Run a quick sample of data generation. For machines with a display use the `--viewer` option to launching the passive viewer (push "w" for wire-frame view to see the robot more easily, more details [here](#mujoco-viewer-tips)). Assets should be downloaded automatically for all runs.
+Run a quick sample of data generation. For machines with a display use the `--viewer` option to launching the passive debug viewer (push "w" for wire-frame view to see the robot more easily, more details [here](#mujoco-viewer-tips)). Assets should be downloaded automatically for all runs.
 
 ```bash
 # Linux
@@ -140,7 +150,7 @@ molmo_spaces/data_generation/main.py  # data generation
 scripts/datagen/run_pipeline.py       # debugging
 ```
 
-This readme contains more information on [experiment configs](#experiment-configs) as well as the other entry-points, for those, please see the [evaluation](#molmospaces-benchmarks) and [data generation](#data-generation) sections of this readme. 
+This readme contains more information on [experiment configs](#experiment-configs) as well as the other entry-points, for those, please see the [evaluation](#benchmarks-and-evaluations) and [data generation](#data-generation) sections of this readme. 
 
 ## MolmoSpaces Assets
 
@@ -198,7 +208,7 @@ python molmo_spaces/evaluation/eval_main.py \
     molmo_spaces.evaluation.configs.evaluation_configs:PiPolicyEvalConfig \
     --benchmark_dir assets/bench/path-to-benchmark.json \
     --checkpoint_path <path/to/checkpoint/pi0_fast_droid_jointpos> \
-    --task_horizon_steps 500
+    --task_horizon_steps 500  # optional (defaults to benchmark value)
 ```
 
 For more information, please refer to an instruction in the [benchmark](molmo_spaces/evaluation/README.md).
@@ -312,6 +322,7 @@ The xml files have been modified from the original versions provided by the foll
 - [mujoco_menagerie / robotiq_2f85_v4](https://github.com/google-deepmind/mujoco_menagerie/tree/main/robotiq_2f85_v4) - Copyright (c) 2013, ROS-Industrial
 - [Rainbow Robotics / rby1-sdk](https://github.com/RainbowRobotics/rby1-sdk) - Copyright 2024-2025 Rainbow Robotics
 - [RUM Gripper](https://github.com/jeffacce/cap-policy) - Copyright (c) 2026 NYU Generalizable Robotics and AI Lab (GRAIL)
+- [I2RT Robotics / i2rt Python API](https://github.com/i2rt-robotics/i2rt) - Copyright (c) I2RT Robotics
 
 ## Citing
 

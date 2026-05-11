@@ -231,7 +231,14 @@ def get_args():
         "--max_episodes",
         type=int,
         default=None,
-        help="Maximum number of episodes to evaluate from benchmark. If None, evaluates all episodes.",
+        help="Limit number of episodes to evaluate from benchmark. If None, evaluates all episodes, else, evaluates only the episodes for the houses used in the first `max_episodes`. Note that the final number of episodes can differ from `max_episodes` if more than one episode is sampled for any of the houses among the first `max_episodes` episodes.",
+    )
+    parser.add_argument(
+        "--camera_names",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Override policy_config.camera_names (e.g. --camera_names randomized_zed2_analogue_1 wrist_camera).",
     )
 
     # Eval camera randomization flags (shared across all JSON eval entry points)
@@ -354,6 +361,7 @@ class EvalRuntimeParams:
     """
 
     episode_idx: int | None = None
+    max_episodes: int | None = None
     add_custom_object: bool = False
     custom_object_path: str | Path | None = None
     custom_object_name: str | None = None
@@ -442,7 +450,7 @@ def run_evaluation(
     preloaded_policy: BasePolicy | None = None,
     max_episodes: int | None = None,
     camera_config_override: Any | None = None,
-    use_filament: bool = False,
+    camera_names_override: list[str] | None = None,
     environment_light_intensity: float | None = None,
     episode_idx: int | None = None,
     add_custom_object: bool = False,
@@ -470,6 +478,8 @@ def run_evaluation(
         max_episodes: Maximum number of episodes to evaluate from benchmark. If None, evaluates all episodes.
         camera_config_override: Optional camera system config (e.g. FrankaEvalCameraSystem) to
             replace the default camera_config on the experiment config.
+        camera_names_override: Optional list of camera names to override
+            policy_config.camera_names (e.g. ["randomized_zed2_analogue_1", "wrist_camera"]).
         episode_idx: Index of a specific episode to evaluate. If None, evaluates all episodes.
         add_custom_object: Whether to replace the target object with a custom object.
         custom_object_path: Path to the custom object XML file. Required if add_custom_object is True.
@@ -605,16 +615,21 @@ def run_evaluation(
         camera_config_override=camera_config_override,
     )
 
-    # Custom filmanet settings to overwrite by the user
-    exp_config.use_filament |= use_filament
+    # Custom filament settings to overwrite by the user
     exp_config.environment_light_intensity = (
         environment_light_intensity or exp_config.environment_light_intensity
     )
+
+    # Override policy camera names if requested
+    if camera_names_override is not None:
+        log.info(f"Overriding policy_config.camera_names: {camera_names_override}")
+        exp_config.policy_config.camera_names = camera_names_override
 
     # Patch config with evaluation-specific runtime parameters
     exp_config = JsonEvalRunner.patch_config(
         exp_config=exp_config,
         episode_idx=episode_idx,
+        max_episodes=max_episodes,
         add_custom_object=add_custom_object,
         custom_object_path=custom_object_path,
         custom_object_name=custom_object_name,
@@ -651,12 +666,6 @@ def run_evaluation(
             }
         )
 
-    # Create or use provided policy
-    if preloaded_policy is not None:
-        policy = preloaded_policy
-    else:
-        policy = exp_config.policy_config.policy_cls(exp_config, exp_config.task_type)
-
     # # Run evaluation
     # runner = JsonEvalRunner(exp_config, benchmark_dir)
     # success_count, total_count = runner.run(preloaded_policy=policy)
@@ -665,7 +674,7 @@ def run_evaluation(
     # Only pass preloaded policy for single-worker mode. With multiple workers,
     # each worker must create its own connection (WebSocket/msgpack can't be pickled).
     runner = JsonEvalRunner(exp_config, benchmark_dir)
-    success_count, total_count = runner.run(preloaded_policy=policy)
+    success_count, total_count = runner.run(preloaded_policy=preloaded_policy)
 
     # Collect per-episode results
     episode_results = collect_episode_results(resolved_output_dir)
@@ -731,9 +740,10 @@ def main() -> None:
         num_workers=args.num_workers,
         use_wandb=not args.no_wandb,
         wandb_project=args.wandb_project,
-        use_filament=args.use_filament,
+        max_episodes=args.max_episodes,
         environment_light_intensity=args.environment_light_intensity,
         camera_config_override=eval_camera_config,
+        camera_names_override=args.camera_names,
         episode_idx=args.idx,
         add_custom_object=args.add_custom_object,
         custom_object_path=args.custom_object_path,

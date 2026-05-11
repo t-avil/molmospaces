@@ -56,7 +56,7 @@ class MlSpacesExpConfig(Config, ABC):
     collision_free_pose_limit: int = 3
 
     # Scene configuration
-    scene_dataset: str  # Scenes to use, e.g. ithor, procthor-10k, procthor-objaverse
+    scene_dataset: str  # Scenes to use, e.g. ithor, procthor-10k, procthor-objaverse. If "user", use the scene_xml_paths in task_sampler_config.
     data_split: str = "train"  # Data split to use, e.g. train, val, test
 
     @property
@@ -97,7 +97,6 @@ class MlSpacesExpConfig(Config, ABC):
 
     filter_for_successful_trajectories: bool = True  # If True, only save successful trajectories to main output directory (failed episodes may be sampled 1% for debug directory). If False, save all trajectories to main output directory.
 
-    use_filament: bool = False
     environment_light_intensity: float = 15000.0
 
     def model_post_init(self, _context) -> None:

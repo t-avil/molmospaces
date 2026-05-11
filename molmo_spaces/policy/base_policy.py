@@ -60,6 +60,7 @@ class BasePolicy(ABC):
     def add_auxiliary_objects(config: "MlSpacesExpConfig", spec: MjSpec) -> None:
         """
         Add auxiliary objects to the scene that might be required for the policy.
+
         Args:
             config: The configuration for the policy.
             spec: The experiment configuration.
@@ -100,9 +101,8 @@ class PlannerPolicy(BasePolicy):
 
 
 class InferencePolicy(BasePolicy):
-    def __init__(self, config: "MlSpacesExpConfig", task_type) -> None:
+    def __init__(self, config: "MlSpacesExpConfig") -> None:
         super().__init__(config)
-        self.task_type = task_type
 
         # TODO(max): remove these (added to silence warnings)
         self.target_poses = {"grasp": np.eye(4)}
@@ -143,7 +143,7 @@ class InferencePolicy(BasePolicy):
 
     def get_info(self) -> dict:
         info = super().get_info()
-        info["task_type"] = self.task_type
+        info["task_type"] = self.config.task_type
         info["timestamp"] = time.time()
         return info
 

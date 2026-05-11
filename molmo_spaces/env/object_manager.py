@@ -1230,14 +1230,15 @@ class ObjectManager:
         """Return of list of all task relevant bodies i.e. not robots/policy objects"""
 
         task_objects = []
-        for object_name, object_dict in self.scene_metadata["objects"].items():
-            if not object_dict["is_static"]:
-                try:
-                    task_object = create_mlspaces_body(self.data, object_name)
-                except KeyError:
-                    log.warning("Could not find object %s in scene", object_name)
-                    continue
-                task_objects.append(task_object)
+        if self.scene_metadata is not None:
+            for object_name, object_dict in self.scene_metadata["objects"].items():
+                if not object_dict["is_static"]:
+                    try:
+                        task_object = create_mlspaces_body(self.data, object_name)
+                    except KeyError:
+                        log.warning("Could not find object %s in scene", object_name)
+                        continue
+                    task_objects.append(task_object)
 
         # TODO(Abhay): do we want this?
         for object_name in self._env.config.task_config.added_objects:
@@ -1463,6 +1464,7 @@ class ObjectManager:
 
     def get_door_bboxes_array(self, object_or_name_or_id: ObjectOrNameOrIdType) -> np.ndarray:
         """Get door collision geometry bounding boxes as an array.
+
         Returns:
             np.ndarray: Array of AABBs (center, size) for door collision geoms
         """
@@ -1614,9 +1616,9 @@ class ObjectManager:
     def get_body_to_geoms(self):
         body_to_geom_ids = defaultdict(set)
         for geom_id in range(0, self.model.ngeom):
-            body_id = self.model.geom(geom_id).bodyid
-            root_id = self.model.body(body_id).rootid
-            body_to_geom_ids[int(root_id)].add(int(geom_id))
+            body_id = int(self.model.geom(geom_id).bodyid.item())
+            root_id = int(self.model.body(body_id).rootid.item())
+            body_to_geom_ids[root_id].add(geom_id)
         return {
             key: sorted(values)
             for key, values in body_to_geom_ids.items()

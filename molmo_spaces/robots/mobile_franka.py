@@ -10,10 +10,8 @@ from mujoco import MjData, MjSpec, mjtGeom
 from molmo_spaces.controllers.abstract import Controller
 from molmo_spaces.controllers.joint_pos import JointPosController
 from molmo_spaces.controllers.joint_rel_pos import JointRelPosController
-from molmo_spaces.kinematics.franka_kinematics import FrankaKinematics
-from molmo_spaces.kinematics.parallel.franka_parallel_kinematics import (
-    FrankaParallelKinematics,
-)
+from molmo_spaces.kinematics.mujoco_kinematics import MlSpacesKinematics
+from molmo_spaces.kinematics.parallel.warp_kinematics import SimpleWarpKinematics
 from molmo_spaces.molmo_spaces_constants import get_robot_path
 from molmo_spaces.robots.abstract import Robot
 
@@ -35,30 +33,9 @@ class MobileFrankaRobot(Robot):
         self._robot_view = config.robot_config.robot_view_factory(
             mj_data, config.robot_config.robot_namespace
         )
-        self._kinematics = FrankaKinematics(
-            self.mj_model,
-            namespace=config.robot_config.robot_namespace,
-            robot_view_factory=config.robot_config.robot_view_factory,
-        )
+        self._kinematics = MlSpacesKinematics(config.robot_config)
 
-        # Use the fixed-base FrankaParallelKinematics for the IK feasibility
-        # check. We pass a fresh FrankaRobotConfig (instead of the mobile config)
-        # so the kinematics chain has only arm + gripper joints — the planar
-        # base is treated as an external transform supplied via base_poses at
-        # ik() / forward() call time. Imported here to avoid circular import
-        # with configs.robot_configs.
-        from molmo_spaces.configs.robot_configs import FrankaRobotConfig
-
-        mobile_cfg = config.robot_config
-        fixed_base_cfg = FrankaRobotConfig(
-            name=mobile_cfg.name,
-            robot_namespace=mobile_cfg.robot_namespace,
-            robot_xml_path=mobile_cfg.robot_xml_path,
-            init_qpos={
-                k: v for k, v in mobile_cfg.init_qpos.items() if k != "base"
-            },
-        )
-        self._parallel_kinematics = FrankaParallelKinematics(fixed_base_cfg)
+        self._parallel_kinematics = SimpleWarpKinematics(config.robot_config)
         arm_controller_cls = (
             JointPosController
             if config.robot_config.command_mode == {}

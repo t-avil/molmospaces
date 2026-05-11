@@ -70,6 +70,7 @@ class Robot:
     @abc.abstractmethod
     def action_dim(self, move_group_ids: list[str]) -> int:
         """sum of the commanded joints, which defines the action space of the robot.
+
         Args:
             move_group_ids: list of move group ids to consider for the action space
         """
@@ -284,6 +285,7 @@ class Robot:
     @abc.abstractmethod
     def set_joint_pos(self, robot_joint_pos_dict) -> None:
         """Set all the robot's joint positions to the specified values.
+
         Args:
             robot_joint_pos_dict: Dictionary containing joint positions for the robot
             based on the move groups ids.
@@ -317,6 +319,7 @@ class Robot:
                 body: mujoco.MjsBody
                 body.gravcomp = 1.0
 
+        # TODO: control overrides will break if non-robot actuators are present
         stiffness, damping = robot_config.K_stiffness, robot_config.K_damping
         if stiffness is not None and damping is not None:
             assert len(stiffness) == len(damping), (
@@ -340,6 +343,16 @@ class Robot:
             for i, actuator in enumerate(actuators[: len(damping)]):
                 actuator.biasprm[2] = -damping[i]
 
+        force_limit = robot_config.force_limit
+        if force_limit is not None:
+            log.debug(f"Applying force limits to robot {cls.robot_model_root_name()}")
+            assert len(force_limit) <= len(actuators), (
+                "number of force limits cannot exceed number of actuators"
+            )
+            for i, actuator in enumerate(actuators[: len(force_limit)]):
+                actuator.forcelimited = 1
+                actuator.forcerange[:] = [-force_limit[i], force_limit[i]]
+
     @classmethod
     def add_robot_to_scene(
         cls,
@@ -353,6 +366,7 @@ class Robot:
     ) -> None:
         """
         Add a robot to a scene, taking care of any robot-specific considerations.
+
         Args:
             robot_config: The robot config, of the corresponding derived class (i.e. FrankaConfig for Franka, etc.)
             spec: The scene to insert the robot into
