@@ -528,6 +528,26 @@ class BaseObjectManipulationPlannerPolicy(PlannerPolicy):
     def _tcp_to_jp_fn(self, mg_id: str, target_pose: np.ndarray) -> dict[str, Any]:
         kinematics = self.task.env.current_robot.kinematics
 
+        # Hard-lock the mobile base on every per-step IK call: rewrite the
+        # planar-joint qpos to the snapped-original pose and zero the qvel
+        # so under-damped base actuators don't drift between ticks.
+        # Per Abhay's suggestion ("could try locking the mobile base during
+        # that ik"). No-op when env has no original_robot_base_pose
+        # (static-base / non-perturbed runs).
+        original = getattr(self.task.env, "original_robot_base_pose", None)
+        if original is not None:
+            from molmo_spaces.utils.pose import pos_quat_to_pose_mat
+
+            pose_m = pos_quat_to_pose_mat(original[:3], original[3:7])
+            self.robot_view.base.pose = pose_m
+            model = self.task.env.current_model
+            data = self.task.env.current_data
+            base_mg = self.robot_view.get_move_group("base")
+            if base_mg.n_joints > 0:
+                for vid in base_mg._joint_veladr:
+                    data.qvel[vid] = 0.0
+            mujoco.mj_forward(model, data)
+
         gripper_mgs = set(self.robot_view.get_gripper_movegroup_ids())
         # Lock the base move group so per-step IK never moves the planar base
         # away from the snapped-original pose. For static robots the base group
