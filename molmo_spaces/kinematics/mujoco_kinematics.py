@@ -215,7 +215,14 @@ class MlSpacesKinematics:
             pose = self._robot_view.base.pose @ pose
 
         move_group = self._robot_view.get_move_group(move_group_id)
+        # Save base joint qpos so we can re-pin every iteration before
+        # mj_fwdPosition, which otherwise lets equality constraints / coupled
+        # joints drift the planar base off the value we just wrote.
+        base_mg = self._robot_view.get_move_group("base") if "base" in self._robot_view.move_group_ids() else None
+        saved_base_qpos = base_mg.joint_pos.copy() if base_mg is not None and base_mg.n_joints > 0 else None
         for i in range(max_iter):
+            if saved_base_qpos is not None:
+                base_mg.joint_pos = saved_base_qpos
             mujoco.mj_fwdPosition(self._mj_model, self._mj_data)
             mujoco.mj_sensorPos(self._mj_model, self._mj_data)
 
