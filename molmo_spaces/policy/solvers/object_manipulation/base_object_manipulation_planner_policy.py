@@ -557,6 +557,9 @@ class BaseObjectManipulationPlannerPolicy(PlannerPolicy):
         return action
 
     def check_feasible_ik(self, pose: np.ndarray) -> bool:
+        excluded = set(self.robot_view.get_gripper_movegroup_ids()) | {"base"}
+        mgs_except_gripper = [x for x in self.robot_view.move_group_ids() if x not in excluded]
+
         if pose.ndim > 2:
             assert pose.shape[1:] == (4, 4)
             batch_size = pose.shape[0]
@@ -576,7 +579,7 @@ class BaseObjectManipulationPlannerPolicy(PlannerPolicy):
             jp_dicts = parallel_kinematics.ik(
                 gripper_mg_id,
                 pose,
-                None,
+                mgs_except_gripper,
                 robot_view.get_qpos_dict(),
                 robot_view.base.pose,
                 rel_to_base=False,
@@ -590,7 +593,7 @@ class BaseObjectManipulationPlannerPolicy(PlannerPolicy):
             jp_dict = kinematics.ik(
                 gripper_mg_id,
                 pose,
-                robot_view.move_group_ids(),
+                mgs_except_gripper,
                 robot_view.get_qpos_dict(),
                 base_pose=robot_view.base.pose,
             )

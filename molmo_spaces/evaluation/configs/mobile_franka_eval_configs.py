@@ -42,7 +42,7 @@ class MobileFrankaPlannerEvalConfig(JsonBenchmarkEvalConfig):
     # Match the static franka's arm-origin world height (rbp.z = 0.091 in the
     # FrankaPickDroidMiniBench benchmark) so reachability is preserved.
     robot_config: MobileFrankaRobotConfig = MobileFrankaRobotConfig(
-        base_size=[0.5, 0.5, 0.09141114843014408],
+        base_size=[0.5, 0.5, 0.09141114843014408 + .58],
     )
     policy_config: PickPlannerPolicyConfig = PickPlannerPolicyConfig()
 

@@ -660,6 +660,8 @@ class JsonEvalTaskSampler(BaseMujocoTaskSampler):
             if "head" in robot.robot_view.move_group_ids():
                 head_mg = robot.robot_view.get_move_group("head")
                 head_mg.ctrl = head_mg.noop_ctrl
+            robot.set_stationary()
+            robot.compute_control()
         log.info("Scene setup from episode spec completed.")
 
     def _randomize_colors(self, env: CPUMujocoEnv) -> None:
@@ -870,30 +872,36 @@ class JsonEvalTaskSampler(BaseMujocoTaskSampler):
         # perturbation around that pose. Range: ±0.5 m in xy, ±π/4 rad in yaw.
         from molmo_spaces.configs.robot_configs import MobileFrankaRobotConfig
 
-        if isinstance(self.config.robot_config, MobileFrankaRobotConfig):
-            env.original_robot_base_pose = np.array(robot_base_pose, dtype=np.float64)
-            dx = np.random.uniform(-0.5, 0.5)
-            dy = np.random.uniform(-0.5, 0.5)
-            dyaw = np.random.uniform(-np.pi / 4, np.pi / 4)
-            perturbed = list(robot_base_pose)
-            perturbed[0] += dx
-            perturbed[1] += dy
-            qw, qx, qy, qz = perturbed[3], perturbed[4], perturbed[5], perturbed[6]
-            orig_rot = R.from_quat([qx, qy, qz, qw])  # scipy uses (x, y, z, w)
-            new_rot = R.from_euler("z", dyaw) * orig_rot
-            nx, ny, nz, nw = new_rot.as_quat()
-            perturbed[3:7] = [nw, nx, ny, nz]
-            log.info(
-                f"Mobile base perturbed by (dx={dx:+.3f}, dy={dy:+.3f}, "
-                f"dyaw={dyaw:+.3f} rad); original saved on env"
-            )
-            robot_base_pose = perturbed
+        # if isinstance(self.config.robot_config, MobileFrankaRobotConfig):
+        #     env.original_robot_base_pose = np.array(robot_base_pose, dtype=np.float64)
+        #     dx = np.random.uniform(-0.5, 0.5)
+        #     dy = np.random.uniform(-0.5, 0.5)
+        #     dyaw = np.random.uniform(-np.pi / 4, np.pi / 4)
+        #     perturbed = list(robot_base_pose)
+        #     perturbed[0] += dx
+        #     perturbed[1] += dy
+        #     qw, qx, qy, qz = perturbed[3], perturbed[4], perturbed[5], perturbed[6]
+        #     orig_rot = R.from_quat([qx, qy, qz, qw])  # scipy uses (x, y, z, w)
+        #     new_rot = R.from_euler("z", dyaw) * orig_rot
+        #     nx, ny, nz, nw = new_rot.as_quat()
+        #     perturbed[3:7] = [nw, nx, ny, nz]
+        #     log.info(
+        #         f"Mobile base perturbed by (dx={dx:+.3f}, dy={dy:+.3f}, "
+        #         f"dyaw={dyaw:+.3f} rad); original saved on env"
+        #     )
+        #     robot_base_pose = perturbed
 
         robot_pose_m = pos_quat_to_pose_mat(robot_base_pose[0:3], robot_base_pose[3:7])
         robot_view.base.pose = robot_pose_m
 
         # Forward to update positions
         mujoco.mj_forward(env.current_model, env.current_data)
+
+        # Reset controllers
+        for controller in env.current_robot.controllers.values():
+            controller.reset()
+        env.current_robot.set_stationary()
+        env.current_robot.compute_control()
 
         # Apply object colors (PickAndPlaceColor tasks store per-object rgba).
         object_colors = getattr(self.config.task_config, "object_colors", None)
