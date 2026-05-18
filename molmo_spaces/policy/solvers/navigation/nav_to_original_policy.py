@@ -151,27 +151,19 @@ class NavToOriginalBasePolicy(PlannerPolicy):
         mujoco.mj_forward(self.task.env.current_model, data)
         return result
 
-    # The mobile_franka base body is added with pos=[0, -0.15] and a 90° z
-    # rotation (quat = unnormalized [1, 0, 0, 1]). Joint qpos values are in
-    # that rotated body-local frame, not world. Conversions:
-    #   joint (jx, jy, jt)  ->  world ((-jy, jx - 0.15, jt + π/2))
-    #   world (Wx, Wy, Wψ)  ->  joint ((Wy + 0.15, -Wx, Wψ - π/2))
-    _BODY_INITIAL_Y = -0.15
-    _BODY_INITIAL_YAW = math.pi / 2
+    # The mobile_franka base body is now added with pos=[0, 0] and identity
+    # quat (Abhay's fix in task_sampler.py), so joint qpos values equal the
+    # body's world pose directly. Conversions reduce to identity.
+    _BODY_INITIAL_Y = 0.0
+    _BODY_INITIAL_YAW = 0.0
 
     @classmethod
     def _world_to_joint(cls, wx: float, wy: float, wyaw: float) -> tuple[float, float, float]:
-        jx = wy - cls._BODY_INITIAL_Y
-        jy = -wx
-        jt = wyaw - cls._BODY_INITIAL_YAW
-        return jx, jy, jt
+        return wx, wy, wyaw
 
     @classmethod
     def _joint_to_world(cls, jx: float, jy: float, jt: float) -> tuple[float, float, float]:
-        wx = -jy
-        wy = jx + cls._BODY_INITIAL_Y
-        wyaw = jt + cls._BODY_INITIAL_YAW
-        return wx, wy, wyaw
+        return jx, jy, jt
 
     def _current_xy_yaw(self) -> np.ndarray:
         # Read directly from mj_data world body pose to dodge the misleading

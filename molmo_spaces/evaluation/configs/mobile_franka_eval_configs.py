@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 from molmo_spaces.configs.policy_configs import (
+    NavThenPickPolicyConfig,
     NavToOriginalBasePolicyConfig,
     PickPlannerPolicyConfig,
 )
@@ -82,6 +83,33 @@ class MobileFrankaNavToOriginalEvalConfig(JsonBenchmarkEvalConfig):
     @property
     def tag(self) -> str:
         return "mobile_franka_nav_to_original_json_benchmark"
+
+    def model_post_init(self, __context) -> None:
+        super().model_post_init(__context)
+        self.robot_config.action_noise_config = ActionNoiseConfig(enabled=False)
+
+
+class MobileFrankaNavThenPickEvalConfig(JsonBenchmarkEvalConfig):
+    """Mobile_franka: drive base via NavToOriginalBasePolicy demonstrator,
+    then run the scripted PickPlannerPolicy. Visible nav + pick in one episode.
+    """
+
+    seed: int = 42
+    policy_dt_ms: float = 66.0
+    end_on_success: bool = True
+    task_horizon: int = 1500
+    use_passive_viewer: bool = False
+
+    robot_config: MobileFrankaRobotConfig = MobileFrankaRobotConfig(
+        base_size=[0.5, 0.5, 0.6714111484301441],
+    )
+    policy_config: NavThenPickPolicyConfig = NavThenPickPolicyConfig()
+
+    use_filament: bool = False
+
+    @property
+    def tag(self) -> str:
+        return "mobile_franka_nav_then_pick_json_benchmark"
 
     def model_post_init(self, __context) -> None:
         super().model_post_init(__context)
