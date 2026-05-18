@@ -140,6 +140,9 @@ class PickPlannerPolicyConfig(ObjectManipulationPlannerPolicyConfig):
 
 
 class NavToOriginalBasePolicyConfig(BasePolicyConfig):
+    """Config for the NavToOriginalBasePolicy demonstrator (drives the planar
+    base to env.original_robot_base_pose via actuator ctrl)."""
+
     policy_cls: type = None
     policy_type: str = "nav_to_original"
 
@@ -151,6 +154,20 @@ class NavToOriginalBasePolicyConfig(BasePolicyConfig):
             )
 
             self.policy_cls = NavToOriginalBasePolicy
+
+
+class NavThenPickPolicyConfig(PickPlannerPolicyConfig):
+    """Combined: nav-to-original demonstrator drives base, then scripted pick."""
+
+    policy_type: str = "nav_then_pick"
+
+    def model_post_init(self, __context) -> None:
+        super().model_post_init(__context)
+        from molmo_spaces.policy.solvers.navigation.nav_then_pick_policy import (
+            NavThenPickPolicy,
+        )
+
+        self.policy_cls = NavThenPickPolicy
 
 
 class PickAndPlacePlannerPolicyConfig(ObjectManipulationPlannerPolicyConfig):

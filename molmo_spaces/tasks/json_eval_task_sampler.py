@@ -17,7 +17,6 @@ recreate the episode are in the JSON, and if the field is present it strictly ov
 
 import importlib
 import logging
-import os
 import types
 from pathlib import Path
 
@@ -443,6 +442,13 @@ class JsonEvalTaskSampler(BaseMujocoTaskSampler):
         Also removes objects specified in scene_modifications.removed_objects from
         the base scene spec.
         """
+        # Let the policy class register any scene-level bodies it needs
+        # (e.g. grasp_collision_* placeholders used by the scripted picker).
+        # Mirrors PickTaskSampler.add_auxiliary_objects on the datagen path.
+        policy_cls = self.config.policy_config.policy_cls
+        if hasattr(policy_cls, "add_auxiliary_objects"):
+            policy_cls.add_auxiliary_objects(self.config, spec)
+
         # First, remove objects from the base scene if specified
         removed_objects = self.episode_spec.scene_modifications.removed_objects
         if removed_objects:
@@ -565,19 +571,6 @@ class JsonEvalTaskSampler(BaseMujocoTaskSampler):
 
         self._metadata_adder.update(name_to_meta)
 
-        # Let the policy class register any scene-level auxiliary bodies it needs
-        # (e.g. grasp_collision_* for the scripted planner). Mirrors what
-        # PickTaskSampler.add_auxiliary_objects does for the datagen path.
-        self.config.policy_config.policy_cls.add_auxiliary_objects(self.config, spec)
-
-        # Optional: dump the fully-compiled scene MJCF to disk for inspection in
-        # mujoco.viewer. Set MLSPACES_DUMP_COMPILED_MJCF=/path/to/out.xml.
-        dump_path = os.environ.get("MLSPACES_DUMP_COMPILED_MJCF")
-        if dump_path:
-            with open(dump_path, "w") as f:
-                f.write(spec.to_xml())
-            log.info(f"[dump] Wrote compiled MJCF to {dump_path}")
-
     def randomize_scene(self, env: CPUMujocoEnv, robot_view) -> None:
         """
         Set up scene state from episode spec.
@@ -641,10 +634,10 @@ class JsonEvalTaskSampler(BaseMujocoTaskSampler):
         mujoco.mj_forward(model, data)
         self.set_joint_values(env)
 
-        # Set robot joint positions from episode spec. Some benchmarks were
-        # authored for a fixed-base franka and supply an empty `base` qpos;
-        # for mobile robots whose actual base move group has joints, fall
-        # back to zeros so the assignment shape matches.
+        # Set robot joint positions from episode spec
+        # Some benchmarks were authored for a fixed-base franka and supply an
+        # empty `base` qpos; for mobile robots whose actual base move group
+        # has joints, fall back to zeros so the assignment shape matches.
         for group_name, qpos in self.episode_spec.robot.init_qpos.items():
             mg = robot_view.get_move_group(group_name)
             qpos_arr = np.array(qpos)
@@ -868,10 +861,12 @@ class JsonEvalTaskSampler(BaseMujocoTaskSampler):
         robot_base_pose = self.episode_spec.task["robot_base_pose"]
         robot_view = env.current_robot.robot_view
 
-        # For mobile bases: stash the benchmark-authored ("original") pose so the
-        # policy can drive back to it, then start the episode at a random
-        # perturbation around that pose. Range: ±0.5 m in xy, ±π/4 rad in yaw.
+        # For mobile bases: stash the benchmark-authored ("original") pose so
+        # downstream policies (e.g. NavToOriginalBasePolicy) can drive back to
+        # it, then start the episode at a small random perturbation around
+        # that pose. Range: ±0.5 m in xy, ±π/4 rad in yaw.
         from molmo_spaces.configs.robot_configs import MobileFrankaRobotConfig
+        from scipy.spatial.transform import Rotation as R
 
         if isinstance(self.config.robot_config, MobileFrankaRobotConfig):
             env.original_robot_base_pose = np.array(robot_base_pose, dtype=np.float64)

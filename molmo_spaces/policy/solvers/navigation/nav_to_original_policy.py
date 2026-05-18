@@ -43,8 +43,8 @@ class NavToOriginalBasePolicy(PlannerPolicy):
 
     POS_TOLERANCE = 0.02  # meters
     YAW_TOLERANCE = 0.05  # radians
-    POS_STEP = 0.1  # meters per step
-    YAW_STEP = 0.2  # radians per step
+    POS_STEP = 0.05  # meters per step (actuator ramp; physics respects contacts)
+    YAW_STEP = 0.05  # radians per step
 
     def __init__(self, config: MlSpacesExpConfig, task: BaseMujocoTask) -> None:
         super().__init__(config, task)
@@ -151,27 +151,19 @@ class NavToOriginalBasePolicy(PlannerPolicy):
         mujoco.mj_forward(self.task.env.current_model, data)
         return result
 
-    # The mobile_franka base body is added with pos=[0, -0.15] and a 90° z
-    # rotation (quat = unnormalized [1, 0, 0, 1]). Joint qpos values are in
-    # that rotated body-local frame, not world. Conversions:
-    #   joint (jx, jy, jt)  ->  world ((-jy, jx - 0.15, jt + π/2))
-    #   world (Wx, Wy, Wψ)  ->  joint ((Wy + 0.15, -Wx, Wψ - π/2))
-    _BODY_INITIAL_Y = -0.15
-    _BODY_INITIAL_YAW = math.pi / 2
+    # The mobile_franka base body is now added with pos=[0, 0] and identity
+    # quat (Abhay's fix in task_sampler.py), so joint qpos values equal the
+    # body's world pose directly. Conversions reduce to identity.
+    _BODY_INITIAL_Y = 0.0
+    _BODY_INITIAL_YAW = 0.0
 
     @classmethod
     def _world_to_joint(cls, wx: float, wy: float, wyaw: float) -> tuple[float, float, float]:
-        jx = wy - cls._BODY_INITIAL_Y
-        jy = -wx
-        jt = wyaw - cls._BODY_INITIAL_YAW
-        return jx, jy, jt
+        return wx, wy, wyaw
 
     @classmethod
     def _joint_to_world(cls, jx: float, jy: float, jt: float) -> tuple[float, float, float]:
-        wx = -jy
-        wy = jx + cls._BODY_INITIAL_Y
-        wyaw = jt + cls._BODY_INITIAL_YAW
-        return wx, wy, wyaw
+        return jx, jy, jt
 
     def _current_xy_yaw(self) -> np.ndarray:
         # Read directly from mj_data world body pose to dodge the misleading
@@ -206,23 +198,17 @@ class NavToOriginalBasePolicy(PlannerPolicy):
                     f"(err xy=({dx:+.4f},{dy:+.4f}), yaw={dyaw:+.4f})"
                 )
                 self._reached = True
-            # Hold at target: write target via joint-frame qpos AND command
-            # actuators with the world target (ctrl is in world frame because
-            # actuators use refsite=world).
-            tjx, tjy, tjt = self._world_to_joint(target[0], target[1], target[2])
-            self._write_joint_qpos(tjx, tjy, tjt)
+            # Hold at target via actuator ctrl (no direct qpos write so
+            # contacts are still enforced).
             return {"base": [target[0], target[1], target[2]], "done": True}
 
-        # Interpolate one step toward target in world frame.
+        # Ramp the actuator target one step closer to the goal. No direct
+        # joint qpos write: physics drives the base, so walls/objects can
+        # block the path and contacts get resolved by the constraint solver.
         step_wx = current[0] + np.clip(dx, -self.POS_STEP, self.POS_STEP)
         step_wy = current[1] + np.clip(dy, -self.POS_STEP, self.POS_STEP)
         step_wyaw = current[2] + np.clip(dyaw, -self.YAW_STEP, self.YAW_STEP)
-        # Convert world step pose to joint-frame qpos and write it directly.
-        sjx, sjy, sjt = self._world_to_joint(step_wx, step_wy, step_wyaw)
-        self._write_joint_qpos(sjx, sjy, sjt)
         self._step += 1
-        # Command actuators with the WORLD step pose so kp*(ctrl - length) ≈ 0
-        # at the just-written body world pose.
         return {"base": [step_wx, step_wy, step_wyaw], "done": False}
 
     def _write_joint_qpos(self, jx: float, jy: float, jt: float) -> None:

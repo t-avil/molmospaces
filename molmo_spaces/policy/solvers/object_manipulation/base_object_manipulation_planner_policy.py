@@ -404,26 +404,6 @@ class BaseObjectManipulationPlannerPolicy(PlannerPolicy):
     def planners(self):
         return {}
 
-    def _snap_to_original_base_pose(self) -> None:
-        """For mobile bases: teleport the planar joint back to the benchmark-authored
-        ("original") robot_base_pose stashed by JsonEvalTaskSampler. No-op when
-        the env doesn't carry an original (static-base or non-perturbed runs).
-
-        This is the "move to original location" workaround for mobile manipulation
-        with a fixed-base IK solver: the policy snaps the base into a known pose
-        before computing IK, so the rest of the scripted manipulation can proceed
-        unchanged.
-        """
-        from molmo_spaces.utils.pose import pos_quat_to_pose_mat
-
-        env = self.task.env
-        original = getattr(env, "original_robot_base_pose", None)
-        if original is None:
-            return
-        pose_m = pos_quat_to_pose_mat(original[:3], original[3:7])
-        env.current_robot.robot_view.base.pose = pose_m
-        mujoco.mj_forward(env.current_model, env.current_data)
-
     def get_all_phases(self):
         phases = super().get_all_phases()
         # Collect all possible phases here, even those not used for a particular trajectory computation
@@ -441,6 +421,26 @@ class BaseObjectManipulationPlannerPolicy(PlannerPolicy):
         phases.update(new_phases)
         return phases
 
+    def _snap_to_original_base_pose(self) -> None:
+        """For mobile bases: teleport the planar joint back to the benchmark-authored
+        ("original") robot_base_pose stashed by JsonEvalTaskSampler. No-op when
+        the env doesn't carry an original (static-base or non-perturbed runs).
+
+        This is a fallback used by PickPlannerPolicy when no nav demonstrator
+        has driven the base into position. NavThenPickPolicy overrides this
+        method to no-op so contacts are not bypassed.
+        """
+        import mujoco as _mj
+        from molmo_spaces.utils.pose import pos_quat_to_pose_mat
+
+        env = self.task.env
+        original = getattr(env, "original_robot_base_pose", None)
+        if original is None:
+            return
+        pose_m = pos_quat_to_pose_mat(original[:3], original[3:7])
+        env.current_robot.robot_view.base.pose = pose_m
+        _mj.mj_forward(env.current_model, env.current_data)
+
     def reset(self, reset_retries: bool = True):
         if not self.ik_warmed_up:
             with Timer() as warmup_time:
@@ -449,8 +449,8 @@ class BaseObjectManipulationPlannerPolicy(PlannerPolicy):
                 )
             self.ik_warmed_up = True
             log.info(f"Warmed up parallel IK solver in {warmup_time.value:.3f}s")
-
         self._snap_to_original_base_pose()
+
         self.action_primitives = self._compute_trajectory()
 
         self.action_idx = 0
@@ -529,9 +529,9 @@ class BaseObjectManipulationPlannerPolicy(PlannerPolicy):
         kinematics = self.task.env.current_robot.kinematics
 
         gripper_mgs = set(self.robot_view.get_gripper_movegroup_ids())
-        # Lock the base move group so per-step IK never moves the planar base
-        # away from the snapped-original pose. For static robots the base group
-        # has 0 joints, so excluding it is a no-op.
+        # Lock the base move group so per-step IK never moves the planar base.
+        # For static robots the "base" group has 0 joints, so excluding it is
+        # a no-op.
         excluded = gripper_mgs | {"base"}
         mgs_except_gripper = [x for x in self.robot_view.move_group_ids() if x not in excluded]
 
@@ -557,6 +557,13 @@ class BaseObjectManipulationPlannerPolicy(PlannerPolicy):
         return action
 
     def check_feasible_ik(self, pose: np.ndarray) -> bool:
+        # Lock the base move group during feasibility IK so the planar base
+        # isn't treated as a free DOF of the manipulation chain.
+        excluded = set(self.robot_view.get_gripper_movegroup_ids()) | {"base"}
+        mgs_except_gripper = [
+            x for x in self.robot_view.move_group_ids() if x not in excluded
+        ]
+
         if pose.ndim > 2:
             assert pose.shape[1:] == (4, 4)
             batch_size = pose.shape[0]
@@ -576,7 +583,7 @@ class BaseObjectManipulationPlannerPolicy(PlannerPolicy):
             jp_dicts = parallel_kinematics.ik(
                 gripper_mg_id,
                 pose,
-                None,
+                mgs_except_gripper,
                 robot_view.get_qpos_dict(),
                 robot_view.base.pose,
                 rel_to_base=False,
@@ -590,7 +597,7 @@ class BaseObjectManipulationPlannerPolicy(PlannerPolicy):
             jp_dict = kinematics.ik(
                 gripper_mg_id,
                 pose,
-                robot_view.move_group_ids(),
+                mgs_except_gripper,
                 robot_view.get_qpos_dict(),
                 base_pose=robot_view.base.pose,
             )
