@@ -442,6 +442,13 @@ class JsonEvalTaskSampler(BaseMujocoTaskSampler):
         Also removes objects specified in scene_modifications.removed_objects from
         the base scene spec.
         """
+        # Let the policy class register any scene-level bodies it needs
+        # (e.g. grasp_collision_* placeholders used by the scripted picker).
+        # Mirrors PickTaskSampler.add_auxiliary_objects on the datagen path.
+        policy_cls = self.config.policy_config.policy_cls
+        if hasattr(policy_cls, "add_auxiliary_objects"):
+            policy_cls.add_auxiliary_objects(self.config, spec)
+
         # First, remove objects from the base scene if specified
         removed_objects = self.episode_spec.scene_modifications.removed_objects
         if removed_objects:
@@ -628,8 +635,16 @@ class JsonEvalTaskSampler(BaseMujocoTaskSampler):
         self.set_joint_values(env)
 
         # Set robot joint positions from episode spec
+        # Some benchmarks were authored for a fixed-base franka and supply an
+        # empty `base` qpos; for mobile robots whose actual base move group
+        # has joints, fall back to zeros so the assignment shape matches.
         for group_name, qpos in self.episode_spec.robot.init_qpos.items():
-            robot_view.get_move_group(group_name).joint_pos = np.array(qpos)
+            mg = robot_view.get_move_group(group_name)
+            qpos_arr = np.array(qpos)
+            expected = len(mg._joint_posadr)
+            if qpos_arr.size == 0 and expected > 0:
+                qpos_arr = np.zeros(expected)
+            mg.joint_pos = qpos_arr
         mujoco.mj_forward(model, data)
 
         for robot in env.robots:
@@ -845,6 +860,33 @@ class JsonEvalTaskSampler(BaseMujocoTaskSampler):
         # Set robot base pose from task dict (validated in __init__)
         robot_base_pose = self.episode_spec.task["robot_base_pose"]
         robot_view = env.current_robot.robot_view
+
+        # For mobile bases: stash the benchmark-authored ("original") pose so
+        # downstream policies (e.g. NavToOriginalBasePolicy) can drive back to
+        # it, then start the episode at a small random perturbation around
+        # that pose. Range: ±0.5 m in xy, ±π/4 rad in yaw.
+        from molmo_spaces.configs.robot_configs import MobileFrankaRobotConfig
+        from scipy.spatial.transform import Rotation as R
+
+        if isinstance(self.config.robot_config, MobileFrankaRobotConfig):
+            env.original_robot_base_pose = np.array(robot_base_pose, dtype=np.float64)
+            dx = np.random.uniform(-0.5, 0.5)
+            dy = np.random.uniform(-0.5, 0.5)
+            dyaw = np.random.uniform(-np.pi / 4, np.pi / 4)
+            perturbed = list(robot_base_pose)
+            perturbed[0] += dx
+            perturbed[1] += dy
+            qw, qx, qy, qz = perturbed[3], perturbed[4], perturbed[5], perturbed[6]
+            orig_rot = R.from_quat([qx, qy, qz, qw])  # scipy uses (x, y, z, w)
+            new_rot = R.from_euler("z", dyaw) * orig_rot
+            nx, ny, nz, nw = new_rot.as_quat()
+            perturbed[3:7] = [nw, nx, ny, nz]
+            log.info(
+                f"Mobile base perturbed by (dx={dx:+.3f}, dy={dy:+.3f}, "
+                f"dyaw={dyaw:+.3f} rad); original saved on env"
+            )
+            robot_base_pose = perturbed
+
         robot_pose_m = pos_quat_to_pose_mat(robot_base_pose[0:3], robot_base_pose[3:7])
         robot_view.base.pose = robot_pose_m
 

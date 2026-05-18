@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, cast
 import mujoco
 import numpy as np
 from mujoco import MjData, MjSpec, mjtGeom
+from scipy.spatial.transform import Rotation as R
 
 from molmo_spaces.controllers.abstract import Controller
 from molmo_spaces.controllers.joint_pos import JointPosController
@@ -217,6 +218,13 @@ class MobileFrankaRobot(Robot):
             trntype=mujoco.mjtTrn.mjTRN_JOINT,
             biastype=mujoco.mjtBias.mjBIAS_AFFINE,
         )
+        # Upstream PR #90 omitted ctrlrange on this actuator, which makes
+        # mujoco compile it to [0,0] -> any commanded yaw clamps to 0 and the
+        # base never rotates. Set it explicitly here. ctrlrange key was also
+        # dropped from MobileFrankaRobotConfig.base_control_params; fall back
+        # to ±π since the base hinge wraps around there anyway.
+        theta_ctrl_lim = theta_act_params.get("ctrlrange", np.pi)
+        theta_act.ctrlrange = np.array([-theta_ctrl_lim, theta_ctrl_lim])
         theta_act.gainprm[0] = theta_act_params["kp"]
         theta_act.biasprm[:3] = [0, -theta_act_params["kp"], theta_act_params["kd"]]
 
