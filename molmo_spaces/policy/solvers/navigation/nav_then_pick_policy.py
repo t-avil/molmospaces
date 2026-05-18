@@ -34,6 +34,11 @@ class NavThenPickPolicy(PickPlannerPolicy):
         self._nav: NavToOriginalBasePolicy | None = None
         self._nav_done: bool = False
 
+    def _snap_to_original_base_pose(self) -> None:
+        # No-op: nav phase already drove the base via actuators. Snapping
+        # would re-introduce a teleport that bypasses collisions.
+        return
+
     def reset(self, reset_retries: bool = True) -> None:
         # Build nav helper now that env/task are set up.
         if self._nav is None:

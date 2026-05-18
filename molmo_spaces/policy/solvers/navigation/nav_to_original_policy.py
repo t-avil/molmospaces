@@ -43,8 +43,8 @@ class NavToOriginalBasePolicy(PlannerPolicy):
 
     POS_TOLERANCE = 0.02  # meters
     YAW_TOLERANCE = 0.05  # radians
-    POS_STEP = 0.1  # meters per step
-    YAW_STEP = 0.2  # radians per step
+    POS_STEP = 0.015  # meters per step (actuator ramp; physics respects contacts)
+    YAW_STEP = 0.03  # radians per step
 
     def __init__(self, config: MlSpacesExpConfig, task: BaseMujocoTask) -> None:
         super().__init__(config, task)
@@ -198,23 +198,17 @@ class NavToOriginalBasePolicy(PlannerPolicy):
                     f"(err xy=({dx:+.4f},{dy:+.4f}), yaw={dyaw:+.4f})"
                 )
                 self._reached = True
-            # Hold at target: write target via joint-frame qpos AND command
-            # actuators with the world target (ctrl is in world frame because
-            # actuators use refsite=world).
-            tjx, tjy, tjt = self._world_to_joint(target[0], target[1], target[2])
-            self._write_joint_qpos(tjx, tjy, tjt)
+            # Hold at target via actuator ctrl (no direct qpos write so
+            # contacts are still enforced).
             return {"base": [target[0], target[1], target[2]], "done": True}
 
-        # Interpolate one step toward target in world frame.
+        # Ramp the actuator target one step closer to the goal. No direct
+        # joint qpos write: physics drives the base, so walls/objects can
+        # block the path and contacts get resolved by the constraint solver.
         step_wx = current[0] + np.clip(dx, -self.POS_STEP, self.POS_STEP)
         step_wy = current[1] + np.clip(dy, -self.POS_STEP, self.POS_STEP)
         step_wyaw = current[2] + np.clip(dyaw, -self.YAW_STEP, self.YAW_STEP)
-        # Convert world step pose to joint-frame qpos and write it directly.
-        sjx, sjy, sjt = self._world_to_joint(step_wx, step_wy, step_wyaw)
-        self._write_joint_qpos(sjx, sjy, sjt)
         self._step += 1
-        # Command actuators with the WORLD step pose so kp*(ctrl - length) ≈ 0
-        # at the just-written body world pose.
         return {"base": [step_wx, step_wy, step_wyaw], "done": False}
 
     def _write_joint_qpos(self, jx: float, jy: float, jt: float) -> None:
