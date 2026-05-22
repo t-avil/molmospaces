@@ -5,11 +5,11 @@ this is not suitable for large batches.
 """
 
 from typing import Literal, TYPE_CHECKING
+import logging
 
 import mujoco
 import numpy as np
 
-from molmo_spaces.molmo_spaces_constants import get_robot_path
 from molmo_spaces.utils.linalg_utils import (
     inverse_homogeneous_matrix,
     relative_to_global_transform,
@@ -18,6 +18,9 @@ from molmo_spaces.utils.linalg_utils import (
 
 if TYPE_CHECKING:
     from molmo_spaces.configs.robot_configs import BaseRobotConfig
+
+
+log = logging.getLogger(__name__)
 
 
 class MlSpacesKinematics:
@@ -39,27 +42,20 @@ class MlSpacesKinematics:
             robot_config: The robot configuration.
         """
         spec = mujoco.MjSpec()
-        robot_xml_path = get_robot_path(robot_config.name) / robot_config.robot_xml_path
-        robot_spec = mujoco.MjSpec.from_file(str(robot_xml_path))
-        for body in robot_spec.bodies:
-            body: mujoco.MjsBody
-            for geom in body.geoms:
-                geom: mujoco.MjsGeom
-                if geom.type == mujoco.mjtGeom.mjGEOM_MESH:
-                    robot_spec.delete(geom)
-
         robot_config.robot_cls.add_robot_to_scene(
             robot_config,
             spec,
-            robot_spec,
-            "",
-            [0.0, 0.0, 0.0],
-            [1.0, 0.0, 0.0, 0.0],
+            prefix=robot_config.robot_namespace,
+            pos=[0.0, 0.0, 0.0],
+            quat=[1.0, 0.0, 0.0, 0.0],
+            strip_meshes=True,
         )
 
         self._mj_model = spec.compile()
         self._mj_data = mujoco.MjData(self._mj_model)
-        self._robot_view = robot_config.robot_view_factory(self._mj_data, "")
+        self._robot_view = robot_config.robot_view_factory(
+            self._mj_data, robot_config.robot_namespace
+        )
         mujoco.mj_forward(self._mj_model, self._mj_data)
 
     def _constrain_state(self) -> None:
@@ -159,7 +155,9 @@ class MlSpacesKinematics:
 
         J = self._robot_view.get_jacobian(move_group_id, unlocked_move_group_ids)
         if (JJT_det := np.linalg.det(J @ J.T)) < 1e-20:
-            print(f"WARN: IK Jacobian is rank deficient! det(JJ^T)={JJT_det:.0e}")
+            log.warning(
+                f"[MlSpacesKinematics][{self._robot_view.name}] IK Jacobian is rank deficient! det(JJ^T)={JJT_det:.0e}"
+            )
         H = J @ J.T + damping * np.eye(J.shape[0])
         q_dot = J.T @ np.linalg.solve(H, twist)
         return q_dot
@@ -236,7 +234,9 @@ class MlSpacesKinematics:
 
             J: np.ndarray = self._robot_view.get_jacobian(move_group_id, unlocked_move_group_ids)
             if (JJT_det := np.linalg.det(J @ J.T)) < 1e-20:
-                print(f"WARN: IK Jacobian is rank deficient! det(JJ^T)={JJT_det:.0e}")
+                log.warning(
+                    f"[MlSpacesKinematics][{self._robot_view.name}] IK Jacobian is rank deficient! det(JJ^T)={JJT_det:.0e}"
+                )
 
             H = J @ J.T + damping * np.eye(J.shape[0])
             q_dot = J.T @ np.linalg.solve(H, err)

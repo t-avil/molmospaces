@@ -15,7 +15,6 @@ import mujoco_warp as mjw
 import warp as wp
 
 from molmo_spaces.kinematics.parallel.parallel_kinematics import ParallelKinematics
-from molmo_spaces.molmo_spaces_constants import get_robot_path
 from molmo_spaces.robots.robot_views.abstract import (
     GripperGroup,
     MJCFFrameMixin,
@@ -263,23 +262,20 @@ class SimpleWarpKinematics(ParallelKinematics):
         self._device = device
 
         spec = MjSpec()
-        robot_xml_path = get_robot_path(robot_config.name) / robot_config.robot_xml_path
-        robot_spec = MjSpec.from_file(str(robot_xml_path))
-        for body in robot_spec.bodies:
-            body: mujoco.MjsBody
-            for geom in body.geoms:
-                geom: mujoco.MjsGeom
-                if geom.type == mujoco.mjtGeom.mjGEOM_MESH:
-                    robot_spec.delete(geom)
         robot_config.robot_cls.add_robot_to_scene(
-            robot_config, spec, robot_spec, "", [0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]
+            robot_config,
+            spec,
+            prefix=robot_config.robot_namespace,
+            pos=[0.0, 0.0, 0.0],
+            quat=[1.0, 0.0, 0.0, 0.0],
+            strip_meshes=True,
         )
         self._mj_model: MjModel = spec.compile()
         with wp.ScopedDevice(self._device):
             self._mjw_model = mjw.put_model(self._mj_model)
 
         mj_data = MjData(self._mj_model)
-        self._robot_view = robot_config.robot_view_factory(mj_data, "")
+        self._robot_view = robot_config.robot_view_factory(mj_data, robot_config.robot_namespace)
 
         self._actuated_move_groups: OrderedDict[str, SimplyActuatedMoveGroup] = OrderedDict()
         self._frame_move_groups: dict[str, MJCFFrameMixin] = {}
@@ -344,7 +340,9 @@ class SimpleWarpKinematics(ParallelKinematics):
         self._get_data(batch_size)
 
         mj_data = MjData(self._mj_model)
-        robot_view = self._robot_config.robot_view_factory(mj_data, "")
+        robot_view = self._robot_config.robot_view_factory(
+            mj_data, self._robot_config.robot_namespace
+        )
         for mg_id, qpos in self._robot_config.init_qpos.items():
             robot_view.get_move_group(mg_id).joint_pos = qpos
         mujoco.mj_forward(self._mj_model, mj_data)

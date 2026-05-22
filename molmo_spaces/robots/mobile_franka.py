@@ -1,18 +1,18 @@
 import logging
 import random
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 import mujoco
 import numpy as np
 from mujoco import MjData, MjSpec, mjtGeom
+from scipy.spatial.transform import Rotation as R
 
 from molmo_spaces.controllers.abstract import Controller
 from molmo_spaces.controllers.joint_pos import JointPosController
 from molmo_spaces.controllers.joint_rel_pos import JointRelPosController
 from molmo_spaces.kinematics.mujoco_kinematics import MlSpacesKinematics
 from molmo_spaces.kinematics.parallel.warp_kinematics import SimpleWarpKinematics
-from molmo_spaces.molmo_spaces_constants import get_robot_path
 from molmo_spaces.robots.abstract import Robot
 
 if TYPE_CHECKING:
@@ -68,36 +68,8 @@ class MobileFrankaRobot(Robot):
     def controllers(self) -> dict[str, Controller]:
         return self._controllers
 
-    @property
-    def state_dim(self) -> int:
-        return 10  # 3dof base + 7dof arm
-
-    def action_dim(self, move_group_ids: list[str]):
-        return 10  # 3dof base + 7dof arm
-
     def get_arm_move_group_ids(self) -> list[str]:
         return ["arm"]
-
-    def update_control(self, action_command_dict: dict[str, Any]) -> None:
-        action_command_dict = self._apply_action_noise_and_save_unnoised_cmd_jp(action_command_dict)
-
-        for mg_id, controller in self.controllers.items():
-            if mg_id in action_command_dict and action_command_dict[mg_id] is not None:
-                controller.set_target(action_command_dict[mg_id])
-            elif not controller.stationary:
-                controller.set_to_stationary()
-
-    def compute_control(self) -> None:
-        for controller in self.controllers.values():
-            ctrl_inputs = controller.compute_ctrl_inputs()
-            controller.robot_move_group.ctrl = ctrl_inputs
-
-    def set_joint_pos(self, robot_joint_pos_dict) -> None:
-        for mg_id, joint_pos in robot_joint_pos_dict.items():
-            self._robot_view.get_move_group(mg_id).joint_pos = joint_pos
-
-    def set_world_pose(self, robot_world_pose) -> None:
-        self._robot_view.base.pose = robot_world_pose
 
     def reset(self) -> None:
         for mg_id, default_pos in self.exp_config.robot_config.init_qpos.items():
@@ -116,7 +88,7 @@ class MobileFrankaRobot(Robot):
         prefix: str,
         randomize_base_texture: bool,
     ) -> None:
-        texture_dir = get_robot_path(robot_config.name) / "assets" / "base_textures"
+        texture_dir = robot_config.get_robot_dir() / "assets" / "base_textures"
         assert texture_dir.is_dir(), f"Texture directory {texture_dir} does not exist"
         texture_path: Path | None = None
         if randomize_base_texture:
@@ -148,11 +120,11 @@ class MobileFrankaRobot(Robot):
         cls,
         robot_config: "MobileFrankaRobotConfig",
         spec: MjSpec,
-        robot_spec: MjSpec,
         prefix: str,
         pos: list[float],
         quat: list[float],
         randomize_textures: bool = False,
+        strip_meshes: bool = False,
     ) -> None:
         def add_slider_act(
             name: str, ctrlrange: float, gainprm: float, biasprm: list[float], gear_idx: int
@@ -186,9 +158,14 @@ class MobileFrankaRobot(Robot):
         robot_body.add_site(name=f"{prefix}base_site", pos=[0, 0, 0], quat=[1, 0, 0, 0])
         base_height = robot_config.base_size[2]
 
-        # Add base geometry (wooden platform). Contacts re-enabled — the
-        # NavToOriginalBasePolicy now searches for a collision-free pose
-        # around the benchmark-authored target.
+        init_rot = R.from_quat(quat, scalar_first=True)
+        init_rpy = init_rot.as_euler("xyz")
+        assert np.allclose(init_rpy[:2], [0, 0]), (
+            f"Initial roll and pitch are not zero: {init_rpy[:2]}"
+        )
+        init_yaw = init_rpy[2]
+
+        # Add base geometry (wooden platform)
         robot_body.add_geom(
             type=mjtGeom.mjGEOM_BOX,
             size=[x / 2 for x in robot_config.base_size],
@@ -198,7 +175,7 @@ class MobileFrankaRobot(Robot):
         )
         attach_frame = robot_body.add_frame(pos=[0, 0, base_height])
 
-        # Attach the robot to the base via the frame
+        robot_spec = cls._load_robot_spec(robot_config, strip_meshes=strip_meshes)
         robot_root_name = cls.robot_model_root_name()
         robot_root = robot_spec.body(robot_root_name)
         if robot_root is None:
@@ -210,13 +187,15 @@ class MobileFrankaRobot(Robot):
         for gear_idx, jnt_name in enumerate(["base_x", "base_y"]):
             act_name = jnt_name + "_act"
             params = robot_config.base_control_params[act_name]
-            jnt_axis = [0] * 3
+            jnt_axis = np.zeros(3)
             jnt_axis[gear_idx] = 1
+            jnt_axis = init_rot.inv().apply(jnt_axis)
             robot_body.add_joint(
                 type=mujoco.mjtJoint.mjJNT_SLIDE,
                 name=f"{prefix}{jnt_name}",
                 axis=jnt_axis,
                 range=[-params["ctrlrange"], params["ctrlrange"]],
+                ref=pos[gear_idx],
             )
             add_slider_act(
                 act_name,
@@ -231,15 +210,23 @@ class MobileFrankaRobot(Robot):
             type=mujoco.mjtJoint.mjJNT_HINGE,
             name=f"{prefix}base_theta",
             axis=[0, 0, 1],
-            range=[-theta_act_params["ctrlrange"], theta_act_params["ctrlrange"]],
+            ref=init_yaw,
         )
-        add_slider_act(
-            "base_theta_act",
-            theta_act_params["ctrlrange"],
-            theta_act_params["kp"],
-            [0, -theta_act_params["kp"], theta_act_params["kd"]],
-            5,
+        theta_act = spec.add_actuator(
+            name=f"{prefix}base_theta_act",
+            target=f"{prefix}base_theta",
+            trntype=mujoco.mjtTrn.mjTRN_JOINT,
+            biastype=mujoco.mjtBias.mjBIAS_AFFINE,
         )
+        # Upstream PR #90 omitted ctrlrange on this actuator, which makes
+        # mujoco compile it to [0,0] -> any commanded yaw clamps to 0 and the
+        # base never rotates. Set it explicitly here. ctrlrange key was also
+        # dropped from MobileFrankaRobotConfig.base_control_params; fall back
+        # to ±π since the base hinge wraps around there anyway.
+        theta_ctrl_lim = theta_act_params.get("ctrlrange", np.pi)
+        theta_act.ctrlrange = np.array([-theta_ctrl_lim, theta_ctrl_lim])
+        theta_act.gainprm[0] = theta_act_params["kp"]
+        theta_act.biasprm[:3] = [0, -theta_act_params["kp"], theta_act_params["kd"]]
 
 
 if __name__ == "__main__":
@@ -247,7 +234,7 @@ if __name__ == "__main__":
     import mujoco.viewer
 
     from molmo_spaces.configs.robot_configs import MobileFrankaRobotConfig
-    from molmo_spaces.molmo_spaces_constants import get_procthor_10k_houses, get_robot_path
+    from molmo_spaces.molmo_spaces_constants import get_procthor_10k_houses
     from molmo_spaces.utils.lazy_loading_utils import (
         install_scene_with_objects_and_grasps_from_path,
     )
@@ -259,16 +246,14 @@ if __name__ == "__main__":
     spec = MjSpec.from_file(house_xml_path)
 
     robot_config = MobileFrankaRobotConfig(base_size=[0.5, 0.5, 0.75])
-    robot_file_path = get_robot_path(robot_config.name) / robot_config.robot_xml_path
-    robot_spec = MjSpec.from_file(str(robot_file_path))
+    robot_config.init_qpos["base"] = [6.8, 9.75, np.radians(90.0)]
 
     MobileFrankaRobot.add_robot_to_scene(
         robot_config,
         spec,
-        robot_spec,
         prefix=robot_config.robot_namespace,
-        pos=[6.8, 9.75],
-        quat=R.from_euler("z", 90, degrees=True).as_quat(scalar_first=True),
+        pos=robot_config.init_qpos["base"][:2],
+        quat=R.from_euler("z", robot_config.init_qpos["base"][2]).as_quat(scalar_first=True),
     )
     MobileFrankaRobot.apply_control_overrides(spec, robot_config)
 
