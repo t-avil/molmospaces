@@ -321,6 +321,9 @@ class JsonEvalRunner(ParallelRolloutRunner):
         episode_idx: int,
     ) -> BaseMujocoTask | None:
         """Sample task - episode spec is already in the JsonEvalTaskSampler."""
+        # Stash the pipeline's within-house episode_idx on the sampler so the
+        # perturbation block (and any curate log) can record it deterministically.
+        task_sampler._current_episode_idx = int(episode_idx)
         return task_sampler.sample_task(house_index=house_id)
 
     @staticmethod

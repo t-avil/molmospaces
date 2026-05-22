@@ -17,6 +17,7 @@ recreate the episode are in the JSON, and if the field is present it strictly ov
 
 import importlib
 import logging
+import os
 import types
 from pathlib import Path
 
@@ -870,9 +871,24 @@ class JsonEvalTaskSampler(BaseMujocoTaskSampler):
 
         if isinstance(self.config.robot_config, MobileFrankaRobotConfig):
             env.original_robot_base_pose = np.array(robot_base_pose, dtype=np.float64)
-            dx = np.random.uniform(-0.5, 0.5)
-            dy = np.random.uniform(-0.5, 0.5)
-            dyaw = np.random.uniform(-np.pi / 4, np.pi / 4)
+            # Seed per-episode so the perturbation is deterministic across runs
+            # given (house_index, episode_idx, seed). Critical for the curated
+            # mobile-franka benchmark artifact to be reproducible.
+            current_episode_idx = int(getattr(self, "_current_episode_idx", 0) or 0)
+            ep_seed = (
+                hash(
+                    (
+                        int(self.episode_spec.seed) if self.episode_spec.seed is not None else 0,
+                        int(self.episode_spec.house_index),
+                        current_episode_idx,
+                    )
+                )
+                & 0xFFFFFFFF
+            )
+            rng = np.random.RandomState(ep_seed)
+            dx = rng.uniform(-0.5, 0.5)
+            dy = rng.uniform(-0.5, 0.5)
+            dyaw = rng.uniform(-np.pi / 4, np.pi / 4)
             perturbed = list(robot_base_pose)
             perturbed[0] += dx
             perturbed[1] += dy
@@ -881,11 +897,35 @@ class JsonEvalTaskSampler(BaseMujocoTaskSampler):
             new_rot = R.from_euler("z", dyaw) * orig_rot
             nx, ny, nz, nw = new_rot.as_quat()
             perturbed[3:7] = [nw, nx, ny, nz]
+            env.perturbed_robot_base_pose = np.array(perturbed, dtype=np.float64)
             log.info(
                 f"Mobile base perturbed by (dx={dx:+.3f}, dy={dy:+.3f}, "
                 f"dyaw={dyaw:+.3f} rad); original saved on env"
             )
             robot_base_pose = perturbed
+
+            # Curate log: if MLSPACES_CURATE_LOG is set, append one JSON line
+            # per episode with the inputs needed to rebuild a Level-2 benchmark.
+            curate_log = os.environ.get("MLSPACES_CURATE_LOG")
+            if curate_log:
+                import json as _json
+
+                with open(curate_log, "a") as f:
+                    f.write(
+                        _json.dumps(
+                            {
+                                "house_index": int(self.episode_spec.house_index),
+                                "episode_idx": current_episode_idx,
+                                "seed": int(self.episode_spec.seed) if self.episode_spec.seed is not None else None,
+                                "original_robot_base_pose": list(map(float, robot_base_pose)) if False else list(map(float, env.original_robot_base_pose)),
+                                "perturbed_robot_base_pose": list(map(float, env.perturbed_robot_base_pose)),
+                                "dx": float(dx),
+                                "dy": float(dy),
+                                "dyaw": float(dyaw),
+                            }
+                        )
+                        + "\n"
+                    )
 
         robot_pose_m = pos_quat_to_pose_mat(robot_base_pose[0:3], robot_base_pose[3:7])
         robot_view.base.pose = robot_pose_m
