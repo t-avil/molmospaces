@@ -64,6 +64,13 @@ def parse_args() -> argparse.Namespace:
         help="Stop after processing this many episodes total. Useful for smoke tests.",
     )
     p.add_argument(
+        "--max_new",
+        type=int,
+        default=None,
+        help="Process at most this many UNprocessed episodes this invocation "
+        "(scatter-safe per-chunk control for adaptive worker scaling).",
+    )
+    p.add_argument(
         "--task_horizon_sec",
         type=int,
         default=60,
@@ -102,59 +109,52 @@ def write_filtered_benchmark(
 
 
 def run_chunk(
-    args: argparse.Namespace, todo_idx: list[int], chunk_id: int
+    args: argparse.Namespace,
+    todo_idx: list[int],
+    chunk_keys: list[tuple[int, int]],
+    chunk_id: int,
 ) -> None:
     """Build a temp benchmark of just the todo episodes, hand it to eval_main."""
     tmp_bench = args.output_dir / f"chunk_{chunk_id:05d}_bench"
     write_filtered_benchmark(args.benchmark_dir, todo_idx, tmp_bench)
-
     curate_log = args.output_dir / "curate_perturbations.jsonl"
     results_log = args.output_dir / "curate_results.jsonl"
-
     env = os.environ.copy()
     env["MLSPACES_CURATE_LOG"] = str(curate_log.resolve())
     env["PYTHONUNBUFFERED"] = "1"
-
     cmd = [
         sys.executable,
         "molmo_spaces/evaluation/eval_main.py",
         args.config,
-        "--benchmark_dir",
-        str(tmp_bench),
-        "--task_horizon_sec",
-        str(args.task_horizon_sec),
+        "--benchmark_dir", str(tmp_bench),
+        "--task_horizon_sec", str(args.task_horizon_sec),
         "--no_wandb",
-        "--num_workers",
-        str(args.num_workers),
-        "--output_dir",
-        str((args.output_dir / "eval_runs").resolve()),
+        "--num_workers", str(args.num_workers),
+        "--output_dir", str((args.output_dir / "eval_runs").resolve()),
     ]
     log.info(f"chunk {chunk_id}: running {len(todo_idx)} eps, cmd: {' '.join(cmd)}")
     t0 = time.time()
     proc = subprocess.run(cmd, env=env)
     dt = time.time() - t0
     log.info(f"chunk {chunk_id}: exit={proc.returncode} in {dt:.1f}s")
-
-    # Pull this chunk's per-episode success status out of the eval output.
-    # eval_main writes EpisodeResult JSON under output_dir/<config>/<ts>/
-    # but we also gate on what landed in curate_perturbations.jsonl.
-    collect_chunk_results(args, todo_idx, results_log)
-    # Cleanup temp benchmark.
+    collect_chunk_results(args, chunk_keys, results_log)
     shutil.rmtree(tmp_bench, ignore_errors=True)
 
 
 def collect_chunk_results(
-    args: argparse.Namespace, todo_idx: list[int], results_log: Path
+    args: argparse.Namespace, chunk_keys: list[tuple[int, int]], results_log: Path
 ) -> None:
-    """Walk the most-recent eval_runs subdirectory; for each episode that has
-    a saved trajectory, mark it processed in curate_results.jsonl. Episodes
-    that errored (no save) are recorded as success=False with status=errored
-    so we don't re-process them on resume."""
+    """For every (house, ep) in this chunk, mark it processed in
+    curate_results.jsonl using the h5 trajectories the pipeline saved.
+    Missing h5 traj -> ep errored at sampling/setup time.
+    """
+    import glob
+    import h5py
     eval_root = args.output_dir / "eval_runs"
-    if not eval_root.exists():
-        return
-    # Find most recent subdir.
-    runs = sorted([p for p in eval_root.iterdir() if p.is_dir()], key=lambda p: p.name)
+    runs = (
+        sorted([p for p in eval_root.iterdir() if p.is_dir()], key=lambda p: p.name)
+        if eval_root.exists() else []
+    )
     if not runs:
         return
     config_dir = runs[-1]
@@ -162,67 +162,49 @@ def collect_chunk_results(
     if not ts_dirs:
         return
     run_dir = ts_dirs[-1]
-
-    # Parse per-episode results from saved h5 trajectory files. The pipeline
-    # writes one h5 per (house_id, ep_idx). Each ep with success comes through
-    # as data_file_path; failures are still in the result list. The easiest
-    # signal is `running_log.log` which contains lines like:
-    #   pipeline.py:1051 Worker 0 house 102 episode 0 ... completed with success=True
-    log_path = run_dir / "running_log.log"
-    succeeded: set[tuple[int, int]] = set()
-    errored: set[tuple[int, int]] = set()
-    seen: set[tuple[int, int]] = set()
-
-    def _parse_house_ep(line: str) -> tuple[int, int] | None:
+    success_by_key: dict[tuple[int, int], bool] = {}
+    for h5_path in glob.glob(str(run_dir / "house_*" / "trajectories_batch_*.h5")):
+        house_name = Path(h5_path).parent.name  # "house_<h>"
         try:
-            parts = line.split()
-            h = int(parts[parts.index("house") + 1])
-            e = int(parts[parts.index("episode") + 1])
-            return (h, e)
+            h_id = int(house_name.split("_", 1)[1])
         except Exception:
-            return None
-
-    if log_path.exists():
-        with log_path.open() as f:
-            for line in f:
-                if "completed with success=" in line:
-                    key = _parse_house_ep(line)
-                    if key is None:
+            continue
+        try:
+            with h5py.File(h5_path, "r") as f:
+                for grp_name in f.keys():
+                    if not grp_name.startswith("traj_"):
                         continue
-                    seen.add(key)
-                    if "success=True" in line:
-                        succeeded.add(key)
-                elif (
-                    "task sampling error" in line
-                    or "rollout error" in line
-                    or "HouseInvalidForTask" in line
-                ):
-                    key = _parse_house_ep(line)
-                    if key is None:
+                    try:
+                        e_id = int(grp_name.split("_", 1)[1])
+                    except Exception:
                         continue
-                    seen.add(key)
-                    errored.add(key)
-
-    # Append per-episode records to results log.
+                    grp = f[grp_name]
+                    if "success" in grp:
+                        succ = bool(grp["success"][...].max())
+                    else:
+                        succ = bool(grp.attrs.get("success", False))
+                    success_by_key[(h_id, e_id)] = succ
+        except Exception as e:
+            log.warning(f"Failed to read {h5_path}: {e}")
     already_logged = {
         (int(r["house_index"]), int(r["episode_idx"]))
         for r in load_jsonl(results_log)
     }
     with results_log.open("a") as f:
-        for (h, e) in seen:
-            if (h, e) in already_logged:
+        for key in chunk_keys:
+            if key in already_logged:
                 continue
-            f.write(
-                json.dumps(
-                    {
-                        "house_index": h,
-                        "episode_idx": e,
-                        "success": (h, e) in succeeded,
-                        "errored": (h, e) in errored,
-                    }
-                )
-                + "\n"
-            )
+            h, e = key
+            if key in success_by_key:
+                f.write(json.dumps({
+                    "house_index": h, "episode_idx": e,
+                    "success": success_by_key[key], "errored": False,
+                }) + "\n")
+            else:
+                f.write(json.dumps({
+                    "house_index": h, "episode_idx": e,
+                    "success": False, "errored": True,
+                }) + "\n")
 
 
 def emit_level2_benchmark(args: argparse.Namespace) -> Path:
@@ -315,12 +297,15 @@ def main() -> None:
     for i in range(n_total):
         if src_keys[i] not in processed:
             todo_idx.append(i)
+    if args.max_new is not None:
+        todo_idx = todo_idx[: args.max_new]
     log.info(f"To process: {len(todo_idx)} episodes")
 
     chunk_size = args.chunk_size
     for chunk_id, start in enumerate(range(0, len(todo_idx), chunk_size)):
         chunk = todo_idx[start : start + chunk_size]
-        run_chunk(args, chunk, chunk_id)
+        chunk_keys = [src_keys[i] for i in chunk]
+        run_chunk(args, chunk, chunk_keys, chunk_id)
 
     out = emit_level2_benchmark(args)
     print(f"\nDone. Curated benchmark: {out}")

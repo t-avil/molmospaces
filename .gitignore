@@ -53,3 +53,10 @@ mlspaces_tests/**/test_data
 # pytest
 .pytest_cache/
 __pycache__/
+
+# mobile_franka curation run artifacts — keep the benchmark JSON/results, drop the heavy/derived stuff
+curate_out_*/eval_runs/
+curate_out_*/chunk_*_bench/
+curate_out_*/*.log
+curate_out_*/*.bak
+curate_out_*/*.live*

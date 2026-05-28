@@ -596,6 +596,31 @@ class BaseMujocoTaskSampler:
         if self._datagen_profiler is not None:
             self._datagen_profiler.start("compile_robot_add")
 
+        # Per-episode mobile-base height. FrankaPickDroidMiniBench stores a
+        # per-episode robot_base_pose[2] (the original fixed-franka arm-origin
+        # height). The mobile base is grounded, so its arm origin sits at
+        # base_size[2]; set base_size[2] = rbp.z + 0.58 so reachability matches
+        # the source episode. A single fixed height left ~half the episodes
+        # unreachable (spurious fail / errored). Each episode gets its own
+        # sampler + rebuild, so this is correct even within multi-episode houses.
+        from molmo_spaces.configs.robot_configs import MobileFrankaRobotConfig
+
+        _ep = getattr(self, "episode_spec", None)
+        if (
+            isinstance(robot_config, MobileFrankaRobotConfig)
+            and _ep is not None
+            and not os.environ.get("MLSPACES_DISABLE_Z_FIX")  # debug toggle for A/B
+        ):
+            _rbp = getattr(_ep, "task", {}).get("robot_base_pose")
+            if _rbp is not None and len(_rbp) >= 3:
+                _bs = list(robot_config.base_size)
+                # rbp.z can be negative (original arm below the floor reference);
+                # a floor-grounded mobile base cannot go below the floor, so clamp
+                # to a small positive platform. Those below-floor episodes are
+                # inherently hard for the mobile base regardless.
+                _bs[2] = max(float(_rbp[2]) + 0.58, 0.05)
+                robot_config.base_size = _bs
+
         if not use_include:
             # Add the robot using a default position
             self.config.robot_config.robot_cls.add_robot_to_scene(
