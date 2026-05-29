@@ -94,3 +94,24 @@ Two viable paths now that molmobot is validated:
 (B) in-process via MolmoBot's harness on a mobile_franka benchmark + SynthVLAPolicy (needs our hybrid code
     in MolmoBot's pinned molmospaces — version mismatch, messier).
 Leaning (A). Key: absolute joint_pos command_mode for arm/gripper; obs alignment to the training cameras.
+
+## Hybrid integration DONE + runs e2e (2026-05-29, commit 1622dd01)
+- Probed the mobile-franka eval obs (MUJOCO_GL=egl): it already renders exo_camera_1 + wrist_camera
+  (352x624x3 uint8) + qpos{base:3,arm:7,gripper:2} + sensor_param_*{intrinsic_cv,extrinsic_cv}. So no
+  manual camera config needed — FrankaPickDroidMiniBench provides the cameras.
+- Wired path (A, served): HybridPointGraspPolicy grasp_mode="molmobot" -> after approach, delegates grasp to
+  WebsocketPolicy(ws:8000); sends CLEAN obs {exo_camera_1,wrist_camera,qpos{arm,gripper},task}; applies
+  absolute arm(7)/gripper(1) into get_noop_ctrl_dict() (base held); reconnects per episode (server logs
+  "Reset policy for the new connection"). New config MobileFrankaHybridMolmobotEvalConfig (policy_dt 200ms).
+- FIRST RUN (1 ep, house 0): pipeline ran end-to-end (perceive -> approach dist0.5/standoff0.45 -> molmobot
+  drove the arm for the grasp), NO crashes/serialization/shape errors. Grasp success=FALSE.
+  => INTEGRATION WORKS. Grasp success not yet achieved (sim2sim gap).
+
+## Why the grasp fails (hypotheses) + tuning levers for success (task 6, iterate)
+- molmobot trained on FIXED DROID franka at the benchmark robot_base_pose; we run MOBILE franka parked at a
+  perception-derived standoff (0.45m, facing) -> different camera framing/workspace than training.
+- Levers to try: (1) park base at/near the ORIGINAL robot_base_pose (where the fixed franka was) instead of
+  a generic standoff, so molmobot sees its training pose; (2) isolate the embodiment gap — run molmobot on
+  mobile_franka placed AT the benchmark pose (skip perception) to see if the mobile arm+cameras alone work;
+  (3) check exo/wrist camera viewpoints + the mobile base column occluding views; (4) confirm 200ms rate.
+- Standalone DROID molmobot = 66.7%, so the model is good; the gap is the mobile/approach setup.
