@@ -188,6 +188,7 @@ class MobileFrankaHybridMolmobotEvalConfig(MobileFrankaHybridPointGraspEvalConfi
 
     policy_config: HybridPointGraspPolicyConfig = HybridPointGraspPolicyConfig(
         grasp_mode="molmobot",
+        approach_target="original",  # park at the training base pose to isolate the grasp
     )
     policy_dt_ms: float = 200.0  # match molmobot's trained control rate
 

@@ -164,21 +164,29 @@ class HybridPointGraspPolicy(PickPlannerPolicy):
             self._nav = _NavToPointPolicy(self.config, self.task)
             self._nav.reset()
             cur = self._nav._current_xy_yaw()  # (x, y, yaw) world
-            p = self._target_world
-            dx, dy = float(p[0] - cur[0]), float(p[1] - cur[1])
-            dist = math.hypot(dx, dy)
-            yaw = math.atan2(dy, dx)  # face the object
-            standoff = float(getattr(self.config.policy_config, "approach_standoff_m", 0.45))
-            if dist > standoff:
-                ux, uy = dx / dist, dy / dist
-                ax, ay = float(p[0] - standoff * ux), float(p[1] - standoff * uy)
+            pc = self.config.policy_config
+            orig = getattr(self.task.env, "original_robot_base_pose", None)
+            if getattr(pc, "approach_target", "perceived") == "original" and orig is not None:
+                # Drive to the episode's training base pose (isolates grasp from approach error).
+                ax, ay = float(orig[0]), float(orig[1])
+                qw, qx, qy, qz = (float(v) for v in orig[3:7])
+                yaw = math.atan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz))
             else:
-                ax, ay = float(cur[0]), float(cur[1])  # already close enough
+                p = self._target_world
+                dx, dy = float(p[0] - cur[0]), float(p[1] - cur[1])
+                dist = math.hypot(dx, dy)
+                yaw = math.atan2(dy, dx)  # face the object
+                standoff = float(getattr(pc, "approach_standoff_m", 0.45))
+                if dist > standoff:
+                    ux, uy = dx / dist, dy / dist
+                    ax, ay = float(p[0] - standoff * ux), float(p[1] - standoff * uy)
+                else:
+                    ax, ay = float(cur[0]), float(cur[1])  # already close enough
             self._nav.set_target(ax, ay, yaw)
             self._approach_steps = 0
             log.info(
-                f"[Hybrid] approach -> (x={ax:.3f}, y={ay:.3f}, yaw={yaw:+.3f}); "
-                f"obj dist={dist:.3f}, standoff={standoff}"
+                f"[Hybrid] approach -> (x={ax:.3f}, y={ay:.3f}, yaw={yaw:+.3f}) "
+                f"target={getattr(pc, 'approach_target', 'perceived')}"
             )
 
         self._approach_steps += 1
@@ -256,7 +264,20 @@ class HybridPointGraspPolicy(PickPlannerPolicy):
             "robot_state": {"qpos": {"arm": arm, "gripper": grip}},
             "task": task,
         }
-        out = self._mb.infer(mb_obs)  # {"arm": (7,), "gripper": (1,), ...}
+        # WebsocketPolicy.infer hardcodes recv timeout=10s, too tight for the
+        # cold first inference after a per-episode reset. Send/recv directly with
+        # a longer timeout, and hold (no crash) if the server is unresponsive.
+        import msgpack_numpy as _mnp
+
+        try:
+            self._mb._ws.send(_mnp.packb(mb_obs))
+            resp = self._mb._ws.recv(timeout=60)
+            if isinstance(resp, str):
+                raise RuntimeError(resp)
+            out = _mnp.unpackb(resp)
+        except Exception as e:  # noqa: BLE001
+            log.warning(f"[Hybrid] molmobot infer failed ({e!r}); holding this step")
+            return self.robot_view.get_noop_ctrl_dict()
         act = self.robot_view.get_noop_ctrl_dict()  # holds base + all groups
         if "arm" in act:
             act["arm"] = np.asarray(out["arm"], dtype=np.float64)

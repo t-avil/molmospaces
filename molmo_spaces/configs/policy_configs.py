@@ -183,6 +183,10 @@ class HybridPointGraspPolicyConfig(PickPlannerPolicyConfig):
     grasp_mode: str = "scripted"  # "scripted" (PickPlanner) | "molmobot" (served VLA)
     molmobot_host: str = "localhost"
     molmobot_port: int = 8000
+    # where to park the base before grasping: "perceived" (standoff from the
+    # perceived point) or "original" (the episode's original_robot_base_pose —
+    # the pose molmobot trained on; isolates the grasp from approach-pose error).
+    approach_target: str = "perceived"
 
     def model_post_init(self, __context) -> None:
         super().model_post_init(__context)
