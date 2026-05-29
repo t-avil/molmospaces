@@ -54,4 +54,14 @@ branch `mobile-franka/molmobot-integration`.
   same 7-DOF arm+gripper (should transfer), but camera viewpoints/obs format must match the training preset.
 
 ## Status (2026-05-29)
-- uv sync (/tmp) + MolmoBot-DROID download (/tmp) running in background. Next: validate standalone, then wire.
+- [DONE] env built (/tmp/MolmoBot/MolmoBot/.venv, torch 2.7.1+cu126), MolmoBot-DROID model.pt (20GB) in /tmp.
+- [DONE] SERVING: `serve_molmo.py --local-path <ckpt> --action-type joint_pos` running (nohup, GPU0 ~10GB,
+  ws://0.0.0.0:8000). Log: /tmp/molmobot_serve.log. Restart cmd in that dir's .venv.
+- [DONE] ROUND-TRIP VALIDATED via /tmp/molmobot_roundtrip.py:
+  obs {exo_camera_1, wrist_camera (HxWx3 uint8), qpos{arm:(7),gripper:(2)}, task:str}
+  -> action {arm:(7,) float32, gripper:(1,) float32}. ~1.5s/inference, buffered for execute_horizon=8 steps.
+- NEXT (task 5): wire molmobot as the grasp stage of HybridPointGraspPolicy.
+  Need: (a) add exo_camera_1 + wrist_camera to the hybrid eval so obs carries rendered RGB;
+  (b) molmobot grasp client (WebsocketPolicy -> ws://localhost:8000) building obs from the sim observation;
+  (c) apply {arm,gripper} joint actions (base parked); set arm/gripper command_mode for joint_pos.
+  Reference: olmo/eval/configure_molmo_spaces.py (camera/obs/action setup) — replicate on mobile_franka.
