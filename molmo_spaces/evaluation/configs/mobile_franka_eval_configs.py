@@ -177,3 +177,20 @@ class MobileFrankaHybridPointGraspEvalConfig(JsonBenchmarkEvalConfig):
     def model_post_init(self, __context) -> None:
         super().model_post_init(__context)
         self.robot_config.action_noise_config = ActionNoiseConfig(enabled=False)
+
+
+class MobileFrankaHybridMolmobotEvalConfig(MobileFrankaHybridPointGraspEvalConfig):
+    """Hybrid POC with the GRASP delegated to a served molmobot VLA
+    (point -> approach -> molmobot). Requires serve_molmo.py running on
+    molmobot_host:molmobot_port. Pointing stays ground_truth to isolate the grasp.
+    Run with MUJOCO_GL=egl so exo_camera_1 + wrist_camera render into the obs.
+    """
+
+    policy_config: HybridPointGraspPolicyConfig = HybridPointGraspPolicyConfig(
+        grasp_mode="molmobot",
+    )
+    policy_dt_ms: float = 200.0  # match molmobot's trained control rate
+
+    @property
+    def tag(self) -> str:
+        return "mobile_franka_hybrid_molmobot_json_benchmark"

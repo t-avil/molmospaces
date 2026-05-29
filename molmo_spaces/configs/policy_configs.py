@@ -180,6 +180,9 @@ class HybridPointGraspPolicyConfig(PickPlannerPolicyConfig):
     molmo_port: int | None = None
     approach_standoff_m: float = 0.45  # stop this far from the perceived point (arm reach)
     max_approach_steps: int = 500  # hard cap so approach always terminates
+    grasp_mode: str = "scripted"  # "scripted" (PickPlanner) | "molmobot" (served VLA)
+    molmobot_host: str = "localhost"
+    molmobot_port: int = 8000
 
     def model_post_init(self, __context) -> None:
         super().model_post_init(__context)

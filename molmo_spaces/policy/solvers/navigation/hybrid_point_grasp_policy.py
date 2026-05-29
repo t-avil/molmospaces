@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 from typing import Any
 
 import numpy as np
@@ -94,6 +95,7 @@ class HybridPointGraspPolicy(PickPlannerPolicy):
         self._target_world: np.ndarray | None = None
         self._nav: _NavToPointPolicy | None = None
         self._approach_steps = 0
+        self._mb = None  # molmobot WebsocketPolicy client (lazy, grasp_mode="molmobot")
 
     def reset(self, reset_retries: bool = True) -> None:
         self._phase = "point"
@@ -108,12 +110,27 @@ class HybridPointGraspPolicy(PickPlannerPolicy):
             self.retry_count = 0
         self.sequential_ik_failures = 0
         self.target_poses = {"pregrasp": np.eye(4), "grasp": np.eye(4), "lift": np.eye(4)}
+        if getattr(self.config.policy_config, "grasp_mode", "scripted") == "molmobot":
+            self._ensure_mb_client()
+            self._mb.reset()  # (re)connect -> fresh server obs-history/action-buffer per episode
+
+    def _ensure_mb_client(self) -> None:
+        if self._mb is None:
+            from molmo_spaces.policy.learned_policy.websocket_policy import WebsocketPolicy
+
+            pc = self.config.policy_config
+            self._mb = WebsocketPolicy(self.config, "synthvla", host=pc.molmobot_host, port=pc.molmobot_port)
+            self._mb.task = self.task  # obs_to_model_input uses task.get_task_description()
 
     def get_phase(self) -> str:
-        return f"hybrid-{self._phase}" if self._phase != "pick" else super().get_phase()
+        if self._phase == "pick":
+            return super().get_phase()
+        if self._phase == "mb_grasp":
+            return "mb-grasp"
+        return f"hybrid-{self._phase}"
 
     def _check_for_failures(self) -> bool:
-        return False if self._phase != "pick" else super()._check_for_failures()
+        return super()._check_for_failures() if self._phase == "pick" else False
 
     # ---- perception ---------------------------------------------------------
     def _perceive_target(self, observation: Any) -> np.ndarray:
@@ -176,6 +193,25 @@ class HybridPointGraspPolicy(PickPlannerPolicy):
 
     # ---- main loop ----------------------------------------------------------
     def get_action(self, observation: Any) -> dict[str, Any]:
+        if os.environ.get("MLSPACES_DEBUG_OBS") and not getattr(self, "_dumped_obs", False):
+            self._dumped_obs = True
+            o = observation[0] if isinstance(observation, list) else observation
+            if isinstance(o, dict):
+                for k, v in o.items():
+                    try:
+                        a = np.asarray(v)
+                        log.info(f"[OBS] {k}: shape={a.shape} dtype={a.dtype}")
+                    except Exception:
+                        log.info(f"[OBS] {k}: type={type(v).__name__} val={str(v)[:80]}")
+                    if isinstance(v, dict):
+                        for kk, vv in v.items():
+                            try:
+                                log.info(f"[OBS]   {k}.{kk}: shape={np.asarray(vv).shape}")
+                            except Exception:
+                                log.info(f"[OBS]   {k}.{kk}: {type(vv).__name__}")
+            else:
+                log.info(f"[OBS] observation type={type(o).__name__}")
+
         if self._phase == "point":
             self._target_world = self._perceive_target(observation)
             log.info(f"[Hybrid] perceived target (world): {self._target_world}")
@@ -188,8 +224,45 @@ class HybridPointGraspPolicy(PickPlannerPolicy):
                 for k, v in self.robot_view.get_noop_ctrl_dict().items():
                     action.setdefault(k, v)  # hold arm/gripper during approach
                 return action
-            self._phase = "pick"
-            log.info("[Hybrid] approach complete; planning scripted grasp")
-            super().reset(reset_retries=False)  # plan grasp, base parked
+            if getattr(self.config.policy_config, "grasp_mode", "scripted") == "molmobot":
+                self._phase = "mb_grasp"
+                log.info("[Hybrid] approach complete; handing off to molmobot grasp")
+            else:
+                self._phase = "pick"
+                log.info("[Hybrid] approach complete; planning scripted grasp")
+                super().reset(reset_retries=False)  # plan grasp, base parked
+
+        if self._phase == "mb_grasp":
+            return self._molmobot_grasp_action(observation)
 
         return super().get_action(observation)
+
+    def _molmobot_grasp_action(self, observation: Any) -> dict[str, Any]:
+        """Query the served molmobot for the grasp; apply its arm/gripper joint
+        targets while holding the (already-parked) base."""
+        o = observation[0] if isinstance(observation, list) else observation
+        arm = np.asarray(o["qpos"]["arm"], dtype=np.float32)
+        grip = np.asarray(o["qpos"]["gripper"], dtype=np.float32)
+        task = (
+            self.task.get_task_description()
+            if hasattr(self.task, "get_task_description")
+            else "pick up the object"
+        )
+        # Send a CLEAN obs (the full sim obs has non-serializable env_states/task_info objects).
+        mb_obs = {
+            "exo_camera_1": np.asarray(o["exo_camera_1"]),
+            "wrist_camera": np.asarray(o["wrist_camera"]),
+            "qpos": {"arm": arm, "gripper": grip},
+            "robot_state": {"qpos": {"arm": arm, "gripper": grip}},
+            "task": task,
+        }
+        out = self._mb.infer(mb_obs)  # {"arm": (7,), "gripper": (1,), ...}
+        act = self.robot_view.get_noop_ctrl_dict()  # holds base + all groups
+        if "arm" in act:
+            act["arm"] = np.asarray(out["arm"], dtype=np.float64)
+        if "gripper" in act:
+            g = np.asarray(out["gripper"], dtype=np.float64).reshape(-1)
+            tgt = np.asarray(act["gripper"], dtype=np.float64).reshape(-1)
+            tgt[: len(g)] = g[: len(tgt)]
+            act["gripper"] = tgt
+        return act
