@@ -65,3 +65,32 @@ branch `mobile-franka/molmobot-integration`.
   (b) molmobot grasp client (WebsocketPolicy -> ws://localhost:8000) building obs from the sim observation;
   (c) apply {arm,gripper} joint actions (base parked); set arm/gripper command_mode for joint_pos.
   Reference: olmo/eval/configure_molmo_spaces.py (camera/obs/action setup) — replicate on mobile_franka.
+
+## Standalone validation (2026-05-29) — run molmobot on FrankaPickDroidMiniBench via MolmoBot's run_eval.py
+- FrankaPickDroidMiniBench already defines the cameras molmobot needs: cameras=["wrist_camera","exo_camera_1"],
+  img_resolution [624,352]. So cameras "come from the benchmark" — no manual camera config for this bench.
+- Launch: `MolmoBot/.venv` run_eval.py --checkpoint_path <ckpt> --benchmark_path <bench dir>
+  --eval_config_cls olmo.eval.configure_molmo_spaces:<CFG> --task_horizon 600
+  env: MUJOCO_GL=egl PYOPENGL_PLATFORM=egl JAX_PLATFORMS=cpu
+- BUG FOUND: first run used SynthVLAFrankaBenchmarkOriginalEvalConfig (action_type=joint_pos_REL) -> 0/3 success.
+  The checkpoint run_name is `Frnk-8n_ABS_vid_2f_8gap...` => trained with ABSOLUTE joint actions. Relative
+  interpretation of absolute actions = systematically wrong. FIX: use README's canonical
+  `FrankaState8ClampAbsPosConfig` (action_type=joint_pos, absolute).
+- RESULT with FrankaState8ClampAbsPosConfig: **2/3 = 66.7%** (house_0 pass, house_1 fail, house_10 pass).
+  => MOLMOBOT WORKS in molmospaces. Zero-shot VLA grasping confirmed. ~4 min/episode (inference ~1.5s/chunk).
+- Takeaway for hybrid: must use ABSOLUTE joint_pos; obs has obs[cam_name] + obs["robot_state"]["qpos"]["arm"|"gripper"];
+  cameras come from the benchmark (exo_camera_1 + wrist_camera); env: MUJOCO_GL/PYOPENGL_PLATFORM=egl, JAX_PLATFORMS=cpu.
+
+## Canonical molmobot eval command (works)
+cd /tmp/MolmoBot/MolmoBot && CUDA_VISIBLE_DEVICES=N MUJOCO_GL=egl PYOPENGL_PLATFORM=egl JAX_PLATFORMS=cpu \
+  .venv/bin/python launch_scripts/run_eval.py --checkpoint_path /tmp/.../MolmoBot-DROID \
+  --benchmark_path <bench dir> --eval_config_cls olmo.eval.configure_molmo_spaces:FrankaState8ClampAbsPosConfig \
+  --task_horizon 600 --num_workers 1 --output_dir <out>
+
+## NEXT: hybrid (point->approach->molmobot grasp on mobile_franka)
+Two viable paths now that molmobot is validated:
+(A) served: hybrid policy (our repo) -> WebsocketPolicy ws:8000 -> molmobot; our eval must render exo+wrist
+    cameras + provide qpos; apply absolute {arm,gripper}. base parked after approach.
+(B) in-process via MolmoBot's harness on a mobile_franka benchmark + SynthVLAPolicy (needs our hybrid code
+    in MolmoBot's pinned molmospaces — version mismatch, messier).
+Leaning (A). Key: absolute joint_pos command_mode for arm/gripper; obs alignment to the training cameras.
