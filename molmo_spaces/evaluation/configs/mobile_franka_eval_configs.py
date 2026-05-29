@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 from molmo_spaces.configs.policy_configs import (
+    HybridPointGraspPolicyConfig,
     NavThenPickPolicyConfig,
     NavToOriginalBasePolicyConfig,
     PickPlannerPolicyConfig,
@@ -140,6 +141,38 @@ class MobileFrankaTeleopEvalConfig(JsonBenchmarkEvalConfig):
     @property
     def tag(self) -> str:
         return "mobile_franka_teleop_json_benchmark"
+
+    def model_post_init(self, __context) -> None:
+        super().model_post_init(__context)
+        self.robot_config.action_noise_config = ActionNoiseConfig(enabled=False)
+
+
+class MobileFrankaHybridPointGraspEvalConfig(JsonBenchmarkEvalConfig):
+    """POC perception->grasp eval for mobile_franka:
+    point (external cam) -> deproject (depth+intrinsics/extrinsics) -> approach
+    -> scripted grasp. Per-episode base height applies via the task_sampler fix.
+
+    pointing_mode defaults to "ground_truth" so the loop runs with no served
+    model; set policy_config.pointing_mode="molmo" (+ host/port) for real Molmo.
+    Note: the "molmo" path needs an exocentric camera with record_depth=True.
+    """
+
+    seed: int = 42
+    policy_dt_ms: float = 66.0
+    end_on_success: bool = True
+    task_horizon: int = 1500
+    use_passive_viewer: bool = False
+
+    robot_config: MobileFrankaRobotConfig = MobileFrankaRobotConfig(
+        base_size=[0.5, 0.5, 0.6714111484301441],
+    )
+    policy_config: HybridPointGraspPolicyConfig = HybridPointGraspPolicyConfig()
+
+    use_filament: bool = False
+
+    @property
+    def tag(self) -> str:
+        return "mobile_franka_hybrid_point_grasp_json_benchmark"
 
     def model_post_init(self, __context) -> None:
         super().model_post_init(__context)

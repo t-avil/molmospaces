@@ -170,6 +170,26 @@ class NavThenPickPolicyConfig(PickPlannerPolicyConfig):
         self.policy_cls = NavThenPickPolicy
 
 
+class HybridPointGraspPolicyConfig(PickPlannerPolicyConfig):
+    """POC: perception (point -> depth -> pose) drives the base approach, then
+    the scripted pick grasps. Stand-in for molmobot behind the same interface."""
+
+    policy_type: str = "hybrid_point_grasp"
+    pointing_mode: str = "ground_truth"  # "ground_truth" (no serving) | "molmo"
+    molmo_host: str | None = None
+    molmo_port: int | None = None
+    approach_standoff_m: float = 0.45  # stop this far from the perceived point (arm reach)
+    max_approach_steps: int = 500  # hard cap so approach always terminates
+
+    def model_post_init(self, __context) -> None:
+        super().model_post_init(__context)
+        from molmo_spaces.policy.solvers.navigation.hybrid_point_grasp_policy import (
+            HybridPointGraspPolicy,
+        )
+
+        self.policy_cls = HybridPointGraspPolicy
+
+
 class PickAndPlacePlannerPolicyConfig(ObjectManipulationPlannerPolicyConfig):
     policy_cls: type = None  # Will be set in model_post_init to avoid circular imports
     move_settle_time: float = 0.5
