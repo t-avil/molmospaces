@@ -249,6 +249,16 @@ class HybridPointGraspPolicy(PickPlannerPolicy):
         """Query the served molmobot for the grasp; apply its arm/gripper joint
         targets while holding the (already-parked) base."""
         o = observation[0] if isinstance(observation, list) else observation
+        if os.environ.get("MLSPACES_SAVE_MB_FRAMES") and not getattr(self, "_saved_frames", False):
+            self._saved_frames = True
+            try:
+                from PIL import Image
+
+                Image.fromarray(np.asarray(o["exo_camera_1"])).save("/tmp/mb_exo.png")
+                Image.fromarray(np.asarray(o["wrist_camera"])).save("/tmp/mb_wrist.png")
+                log.info("[Hybrid] saved molmobot input frames: /tmp/mb_exo.png /tmp/mb_wrist.png")
+            except Exception as e:  # noqa: BLE001
+                log.warning(f"[Hybrid] frame save failed: {e!r}")
         arm = np.asarray(o["qpos"]["arm"], dtype=np.float32)
         grip = np.asarray(o["qpos"]["gripper"], dtype=np.float32)
         task = (
