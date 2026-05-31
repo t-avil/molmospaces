@@ -115,3 +115,23 @@ Leaning (A). Key: absolute joint_pos command_mode for arm/gripper; obs alignment
   mobile_franka placed AT the benchmark pose (skip perception) to see if the mobile arm+cameras alone work;
   (3) check exo/wrist camera viewpoints + the mobile base column occluding views; (4) confirm 200ms rate.
 - Standalone DROID molmobot = 66.7%, so the model is good; the gap is the mobile/approach setup.
+
+## 2026-05-30 — Obs-alignment iteration #1 (HYPOTHESIS DISPROVED)
+- Direction from user: reuse perturbations to stand at the SAME location as the succeeded standalone
+  episodes; rewrite code to align better; do NOT fine-tune molmobot. 1-month budget.
+- Implemented: `approach_target="original"` parks the mobile base at the un-perturbed
+  `env.original_robot_base_pose` (where the standalone fixed-franka stood and grasped). Added the
+  hybrid robustness fix (60s recv timeout + hold-on-fail) and a frame-saver
+  (`MLSPACES_SAVE_MB_FRAMES`). Per-episode reconnect still hangs on episodes 2+ (server-side).
+- HYPOTHESIS TESTED: the "OOD mobile-base column" in exo. Forced the platform geom fully transparent
+  in mobile_franka.add_robot_to_scene. RESULT: exo image identical — the dark block visible in exo
+  is part of the franka model itself (also present in the fixed-franka eval), NOT my mobile-base
+  platform. Hypothesis DISPROVED. The obs is not OOD on the mobile-base column side.
+- Reverted to a gated `MLSPACES_HIDE_MOBILE_BASE_VIS` (set by `MobileFrankaHybridMolmobotEvalConfig`)
+  even though it isn't the gap, since it costs nothing and isolates the franka body from the platform.
+- NEW direction: the obs gap is more subtle — most likely candidates are (a) the arm's INITIAL JOINT
+  CONFIGURATION at episode start (mobile_franka may not honor the benchmark's init_qpos the same way
+  as the fixed franka), or (b) the wrist-camera mount frame on the mobile-mounted franka arm vs the
+  fixed franka. Next diagnostic = dump qpos.arm + sensor_param_wrist_camera.extrinsic_cv at step 0
+  from BOTH the passing fixed-franka standalone eval and the failing mobile-franka hybrid eval, and
+  diff. Whichever differs is the alignment to fix.

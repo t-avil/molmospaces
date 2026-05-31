@@ -13,6 +13,8 @@ Usage:
 
 from __future__ import annotations
 
+import os
+
 from molmo_spaces.configs.policy_configs import (
     HybridPointGraspPolicyConfig,
     NavThenPickPolicyConfig,
@@ -195,3 +197,9 @@ class MobileFrankaHybridMolmobotEvalConfig(MobileFrankaHybridPointGraspEvalConfi
     @property
     def tag(self) -> str:
         return "mobile_franka_hybrid_molmobot_json_benchmark"
+
+    def model_post_init(self, __context) -> None:
+        super().model_post_init(__context)
+        # Hide the mobile-base visual column so the exo camera matches the
+        # fixed-DROID-franka distribution molmobot trained on (physics unchanged).
+        os.environ["MLSPACES_HIDE_MOBILE_BASE_VIS"] = "1"

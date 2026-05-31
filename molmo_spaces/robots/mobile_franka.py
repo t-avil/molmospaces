@@ -1,4 +1,5 @@
 import logging
+import os
 import random
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -169,14 +170,27 @@ class MobileFrankaRobot(Robot):
         )
         init_yaw = init_rpy[2]
 
-        # Add base geometry (wooden platform)
-        robot_body.add_geom(
-            type=mjtGeom.mjGEOM_BOX,
-            size=[x / 2 for x in robot_config.base_size],
-            pos=[0, 0, base_height / 2],
-            material=material_name,
-            group=0,  # Visual group
-        )
+        # Add base geometry. NOTE: forcing this geom transparent (verified
+        # 2026-05-30) does NOT remove the dark block visible in exo_camera_1
+        # right of the table — that block is part of the franka model itself
+        # (also present in the fixed-franka eval), not the mobile-base platform.
+        # So this visibility toggle is kept for cleanup but isn't the obs gap.
+        if os.environ.get("MLSPACES_HIDE_MOBILE_BASE_VIS"):
+            robot_body.add_geom(
+                type=mjtGeom.mjGEOM_BOX,
+                size=[x / 2 for x in robot_config.base_size],
+                pos=[0, 0, base_height / 2],
+                rgba=[0.0, 0.0, 0.0, 0.0],
+                group=0,
+            )
+        else:
+            robot_body.add_geom(
+                type=mjtGeom.mjGEOM_BOX,
+                size=[x / 2 for x in robot_config.base_size],
+                pos=[0, 0, base_height / 2],
+                material=material_name,
+                group=0,  # Visual group
+            )
         attach_frame = robot_body.add_frame(pos=[0, 0, base_height])
 
         robot_spec = cls._load_robot_spec(robot_config, strip_meshes=strip_meshes)
