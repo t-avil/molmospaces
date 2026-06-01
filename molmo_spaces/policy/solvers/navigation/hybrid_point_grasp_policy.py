@@ -132,11 +132,11 @@ class HybridPointGraspPolicy(PickPlannerPolicy):
             self._mb._ws.send(_mnp.packb({"__reset__": True}))
             self._mb._ws.recv(timeout=30)  # ack
         except Exception as e:  # noqa: BLE001
-            log.warning(f"[Hybrid] molmobot in-band reset failed ({e!r}); reconnecting")
-            try:
-                self._mb.reset()
-            except Exception:  # noqa: BLE001
-                pass
+            # Do NOT reconnect (a fresh connection deadlocks on the server's
+            # global semaphore). Keepalive is disabled server-side, so the
+            # persistent connection should stay healthy; a missed reset only
+            # risks stale history for the first few steps of an episode.
+            log.warning(f"[Hybrid] molmobot in-band reset failed ({e!r}); continuing")
 
     def get_phase(self) -> str:
         if self._phase == "pick":
@@ -297,7 +297,7 @@ class HybridPointGraspPolicy(PickPlannerPolicy):
 
         try:
             self._mb._ws.send(_mnp.packb(mb_obs))
-            resp = self._mb._ws.recv(timeout=60)
+            resp = self._mb._ws.recv(timeout=20)  # server is <2s; 20s safety (only blows up under contention)
             if isinstance(resp, str):
                 raise RuntimeError(resp)
             out = _mnp.unpackb(resp)
