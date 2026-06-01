@@ -112,7 +112,7 @@ class HybridPointGraspPolicy(PickPlannerPolicy):
         self.target_poses = {"pregrasp": np.eye(4), "grasp": np.eye(4), "lift": np.eye(4)}
         if getattr(self.config.policy_config, "grasp_mode", "scripted") == "molmobot":
             self._ensure_mb_client()
-            self._mb.reset()  # (re)connect -> fresh server obs-history/action-buffer per episode
+            self._mb_reset_server()  # in-band reset on the persistent connection (no reconnect)
 
     def _ensure_mb_client(self) -> None:
         if self._mb is None:
@@ -121,6 +121,22 @@ class HybridPointGraspPolicy(PickPlannerPolicy):
             pc = self.config.policy_config
             self._mb = WebsocketPolicy(self.config, "synthvla", host=pc.molmobot_host, port=pc.molmobot_port)
             self._mb.task = self.task  # obs_to_model_input uses task.get_task_description()
+            self._mb.prepare_model()  # connect ONCE; reused across episodes (reconnect deadlocks the server)
+
+    def _mb_reset_server(self) -> None:
+        """Reset the served policy's obs-history/action-buffer between episodes via
+        an in-band sentinel (reconnecting deadlocks the single-connection server)."""
+        import msgpack_numpy as _mnp
+
+        try:
+            self._mb._ws.send(_mnp.packb({"__reset__": True}))
+            self._mb._ws.recv(timeout=30)  # ack
+        except Exception as e:  # noqa: BLE001
+            log.warning(f"[Hybrid] molmobot in-band reset failed ({e!r}); reconnecting")
+            try:
+                self._mb.reset()
+            except Exception:  # noqa: BLE001
+                pass
 
     def get_phase(self) -> str:
         if self._phase == "pick":
