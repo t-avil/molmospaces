@@ -1,3 +1,24 @@
+diff --git a/MolmoBot/launch_scripts/serve_molmo.py b/MolmoBot/launch_scripts/serve_molmo.py
+index aef34c1..19372b9 100644
+--- a/MolmoBot/launch_scripts/serve_molmo.py
++++ b/MolmoBot/launch_scripts/serve_molmo.py
+@@ -115,6 +115,7 @@ def get_args():
+     parser.add_argument("--local-path", type=str, help="Local path to model, put in ckpts/molmobot/ if not provided")
+     parser.add_argument("--action-type", choices=["joint_pos", "joint_pos_rel"], help="Action type", default="joint_pos")
+     parser.add_argument("--no-max-delta", action="store_true", help="Disable safety clamp on joint deltas")
++    parser.add_argument("--port", type=int, default=8000, help="Port to serve on (use distinct ports for multi-GPU sharding)")
+ 
+     return parser.parse_args()
+ 
+@@ -150,7 +151,7 @@ def main():
+     policy = load_molmo(checkpoint_path, action_type, args.no_max_delta)
+     print(f"Serving {checkpoint_path} policy on {torch.cuda.device_count()} GPUs")
+ 
+-    server = WebsocketPolicyServer([policy], "synthvla", port=8000,
++    server = WebsocketPolicyServer([policy], "synthvla", port=args.port,
+                                    metadata={"local_path": checkpoint_path, "s3-path": args.s3_path, "hf_repo": args.hf_repo})
+     server.serve_forever()
+ 
 diff --git a/MolmoBot/olmo/eval/websocket_server.py b/MolmoBot/olmo/eval/websocket_server.py
 index cb90140..3f954d7 100644
 --- a/MolmoBot/olmo/eval/websocket_server.py

@@ -203,3 +203,8 @@ class MobileFrankaHybridMolmobotEvalConfig(MobileFrankaHybridPointGraspEvalConfi
         # Hide the mobile-base visual column so the exo camera matches the
         # fixed-DROID-franka distribution molmobot trained on (physics unchanged).
         os.environ["MLSPACES_HIDE_MOBILE_BASE_VIS"] = "1"
+        # Allow per-shard server targeting for multi-GPU sweeps: each shard runs
+        # its own serve_molmo.py on a distinct port (8000 + gpu) and sets MLSPACES_MB_PORT.
+        _port = os.environ.get("MLSPACES_MB_PORT")
+        if _port:
+            self.policy_config.molmobot_port = int(_port)
