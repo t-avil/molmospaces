@@ -1,0 +1,47 @@
+diff --git a/MolmoBot/olmo/eval/websocket_server.py b/MolmoBot/olmo/eval/websocket_server.py
+index cb90140..3f954d7 100644
+--- a/MolmoBot/olmo/eval/websocket_server.py
++++ b/MolmoBot/olmo/eval/websocket_server.py
+@@ -117,6 +117,10 @@ class WebsocketPolicyServer:
+             compression=None,
+             max_size=None,
+             process_request=_health_check,
++            ping_interval=20,   # keepalive on, but...
++            ping_timeout=120,   # ...generous timeout: never trips on a ~2s inference,
++                                # yet still reaps dead/zombie connections so a killed
++                                # client doesn't hold the single server semaphore forever.
+         ) as server:
+             await server.serve_forever()
+ 
+@@ -161,14 +165,28 @@ class WebsocketPolicyServer:
+         await websocket.send(packer.pack(self._metadata))
+ 
+         prev_total_time = None
+-        logger.debug(f"Acquiring semaphore for client {client_id}")
+-        async with self._server_semaphore:
+-            logger.debug(f"Acquired semaphore for client {client_id}")
++        # Previously this acquired self._server_semaphore (Semaphore(1)) for the
++        # ENTIRE connection lifetime, serializing whole connections. That
++        # deadlocked per-episode reconnects: the previous episode's idle/zombie
++        # connection kept the lone slot, so the new connection's every inference
++        # timed out (20s) for the rest of the run. Inference is already
++        # serialized by _acquire_policy(), so this connection-level lock is
++        # redundant; drop it and just run the request loop.
++        if True:
+             try:
+                 while True:
+                     start_time = time.monotonic()
+                     obs = msgpack_numpy.unpackb(await websocket.recv())
+ 
++                    # In-band reset: lets a long-lived client reset policy state
++                    # between episodes without reconnecting (reconnect deadlocks on
++                    # the single server semaphore held for the connection's lifetime).
++                    if isinstance(obs, dict) and obs.get("__reset__"):
++                        async with self._acquire_policy() as policy:
++                            policy.reset()
++                        await websocket.send(packer.pack({"reset_ok": True}))
++                        continue
++
+                     async with self._acquire_policy() as policy:
+ 
+ 

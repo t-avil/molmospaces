@@ -111,8 +111,13 @@ class HybridPointGraspPolicy(PickPlannerPolicy):
         self.sequential_ik_failures = 0
         self.target_poses = {"pregrasp": np.eye(4), "grasp": np.eye(4), "lift": np.eye(4)}
         if getattr(self.config.policy_config, "grasp_mode", "scripted") == "molmobot":
-            self._ensure_mb_client()
-            self._mb_reset_server()  # in-band reset on the persistent connection (no reconnect)
+            # Drop any stale connection so the grasp phase reconnects fresh. The
+            # server resets its policy (obs-history/action-buffer) on every new
+            # connection, so a per-episode reconnect *is* the between-episode
+            # reset. This also avoids the bug where one persistent connection
+            # goes half-open during the multi-second scene-setup gap between
+            # episodes (server keepalive reaps it -> every later grasp times out).
+            self._mb_close()
 
     def _ensure_mb_client(self) -> None:
         if self._mb is None:
@@ -121,22 +126,17 @@ class HybridPointGraspPolicy(PickPlannerPolicy):
             pc = self.config.policy_config
             self._mb = WebsocketPolicy(self.config, "synthvla", host=pc.molmobot_host, port=pc.molmobot_port)
             self._mb.task = self.task  # obs_to_model_input uses task.get_task_description()
-            self._mb.prepare_model()  # connect ONCE; reused across episodes (reconnect deadlocks the server)
+            self._mb.prepare_model()  # fresh connect; server resets its policy state for us
 
-    def _mb_reset_server(self) -> None:
-        """Reset the served policy's obs-history/action-buffer between episodes via
-        an in-band sentinel (reconnecting deadlocks the single-connection server)."""
-        import msgpack_numpy as _mnp
-
-        try:
-            self._mb._ws.send(_mnp.packb({"__reset__": True}))
-            self._mb._ws.recv(timeout=30)  # ack
-        except Exception as e:  # noqa: BLE001
-            # Do NOT reconnect (a fresh connection deadlocks on the server's
-            # global semaphore). Keepalive is disabled server-side, so the
-            # persistent connection should stay healthy; a missed reset only
-            # risks stale history for the first few steps of an episode.
-            log.warning(f"[Hybrid] molmobot in-band reset failed ({e!r}); continuing")
+    def _mb_close(self) -> None:
+        """Cleanly close the molmobot connection so the server's handler exits and
+        releases its single-client semaphore; the next grasp step reconnects."""
+        if self._mb is not None:
+            try:
+                self._mb.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self._mb = None
 
     def get_phase(self) -> str:
         if self._phase == "pick":
@@ -291,18 +291,26 @@ class HybridPointGraspPolicy(PickPlannerPolicy):
             "task": task,
         }
         # WebsocketPolicy.infer hardcodes recv timeout=10s, too tight for the
-        # cold first inference after a per-episode reset. Send/recv directly with
-        # a longer timeout, and hold (no crash) if the server is unresponsive.
+        # cold first inference after a fresh connect. Send/recv directly with a
+        # longer timeout. On failure, drop the connection and reconnect once
+        # (self-heals a half-open socket); only hold if the retry also fails.
         import msgpack_numpy as _mnp
 
-        try:
-            self._mb._ws.send(_mnp.packb(mb_obs))
-            resp = self._mb._ws.recv(timeout=20)  # server is <2s; 20s safety (only blows up under contention)
-            if isinstance(resp, str):
-                raise RuntimeError(resp)
-            out = _mnp.unpackb(resp)
-        except Exception as e:  # noqa: BLE001
-            log.warning(f"[Hybrid] molmobot infer failed ({e!r}); holding this step")
+        out = None
+        for attempt in (1, 2):
+            try:
+                self._ensure_mb_client()
+                self._mb._ws.send(_mnp.packb(mb_obs))
+                resp = self._mb._ws.recv(timeout=20)  # server is <2s; 20s safety margin
+                if isinstance(resp, str):
+                    raise RuntimeError(resp)
+                out = _mnp.unpackb(resp)
+                break
+            except Exception as e:  # noqa: BLE001
+                log.warning(f"[Hybrid] molmobot infer failed (attempt {attempt}/2: {e!r})")
+                self._mb_close()  # force a fresh reconnect on the next attempt
+        if out is None:
+            log.warning("[Hybrid] holding this step (molmobot unreachable after reconnect)")
             return self.robot_view.get_noop_ctrl_dict()
         act = self.robot_view.get_noop_ctrl_dict()  # holds base + all groups
         if "arm" in act:

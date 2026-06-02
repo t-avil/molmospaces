@@ -60,3 +60,6 @@ curate_out_*/chunk_*_bench/
 curate_out_*/*.log
 curate_out_*/*.bak
 curate_out_*/*.live*
+
+# transient molmobot eval logs at repo root
+/*.log
