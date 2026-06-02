@@ -132,13 +132,25 @@ def launch_shard(mode: str, gpu: int, port: int, bench_dir: Path, out_dir: Path,
     env["PYOPENGL_PLATFORM"] = "egl"
     env["PYTHONUNBUFFERED"] = "1"
     if mode == "mobile":
-        py, cwd = str(MOBILE_PY), str(REPO)
+        # served VLA via the molmospaces hybrid; horizon in SECONDS
         env["MLSPACES_MB_PORT"] = str(port)
+        cmd = [str(MOBILE_PY), "molmo_spaces/evaluation/eval_main.py", MODE_CFG["mobile"],
+               "--benchmark_dir", str(bench_dir), "--task_horizon_sec", str(horizon),
+               "--no_wandb", "--num_workers", "1", "--output_dir", str(out_dir)]
+        cwd = str(REPO)
     else:
-        py, cwd = str(MOLMOBOT_PY), str(REPO)
-    cmd = [py, "molmo_spaces/evaluation/eval_main.py", MODE_CFG[mode],
-           "--benchmark_dir", str(bench_dir), "--task_horizon_sec", str(horizon),
-           "--no_wandb", "--num_workers", "1", "--output_dir", str(out_dir)]
+        # in-process VLA on the fixed DROID franka via MolmoBot's run_eval.py
+        # (it injects checkpoint_path into the config). task_horizon is in STEPS;
+        # convert from seconds at the 200ms control dt (5 steps/sec) to match the
+        # mobile run's sim-time budget.
+        steps = horizon * 5
+        cmd = [str(MOLMOBOT_PY), "launch_scripts/run_eval.py",
+               "--checkpoint_path", str(CKPT),
+               "--benchmark_path", str(bench_dir),
+               "--eval_config_cls", MODE_CFG["static"],
+               "--task_horizon", str(steps),
+               "--num_workers", "1", "--output_dir", str(out_dir)]
+        cwd = str(MOLMOBOT_DIR)
     return subprocess.Popen(cmd, cwd=cwd, env=env,
                             stdout=open(log_path, "w"), stderr=subprocess.STDOUT)
 

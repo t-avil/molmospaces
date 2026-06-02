@@ -1,0 +1,2 @@
+static-mode invocation validated end-to-end via the orchestrator on 2026-06-01
+(run_eval.py path, h5 collection keyed correctly). Driver may run the static sweep.
