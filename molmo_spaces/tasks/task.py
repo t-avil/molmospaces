@@ -14,6 +14,7 @@ Action Noise:
 
 import contextlib
 import logging
+import os
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
@@ -86,8 +87,59 @@ class BaseMujocoTask(ABC):
         # Optional profiler for granular timing (set via set_datagen_profiler)
         self._datagen_profiler = None
 
+        # --- Conservative early-abort for doomed episodes (opt-in via env var) ---
+        # When MLSPACES_EARLY_ABORT is set (truthy), a stuck-detector watches the
+        # task's progress signals and ends episodes that are unambiguously dead,
+        # scoring them as failures (which they would be anyway at timeout). When the
+        # flag is unset this whole mechanism is inert and behavior is byte-identical.
+        self._early_abort_enabled = self._env_flag_truthy("MLSPACES_EARLY_ABORT")
+        # K = consecutive policy steps of zero progress before we are allowed to abort.
+        # Default 600 policy steps ~= 40 s sim: a full 40 s with no lift and no
+        # gripper approach, well past the ~40 s by which real successes have lifted.
+        self._abort_patience = self._env_int("MLSPACES_ABORT_PATIENCE", 600)
+        # Minimum elapsed policy steps before any abort can fire. 900 steps ~= 60 s,
+        # so short-horizon successes (which finish by ~40 s) are never touched.
+        self._abort_min_steps = self._env_int("MLSPACES_ABORT_MIN_STEPS", 900)
+        # Object must have stayed below this lift (m) the entire episode to be abortable.
+        self._abort_lift_eps = self._env_float("MLSPACES_ABORT_LIFT_EPS", 0.01)
+        # Progress bookkeeping (reset in reset()).
+        self._early_aborted = False
+        self._abort_max_lift = -np.inf  # best object lift-above-start seen so far
+        self._abort_min_dist = np.inf  # best (smallest) gripper-to-object dist seen
+        self._abort_no_progress_steps = 0  # consecutive steps without any progress
+
         # Please don't call self.reset() here. reset should return the first observation, if we do it in
         # __init__ it will end up in the cache, but not being returned to the user.
+
+    @staticmethod
+    def _env_flag_truthy(name: str) -> bool:
+        """True iff env var ``name`` is set to a truthy value (1/true/yes/on)."""
+        val = os.environ.get(name)
+        if val is None:
+            return False
+        return val.strip().lower() in ("1", "true", "yes", "on")
+
+    @staticmethod
+    def _env_int(name: str, default: int) -> int:
+        val = os.environ.get(name)
+        if val is None or val.strip() == "":
+            return default
+        try:
+            return int(val)
+        except ValueError:
+            log.warning("Invalid int for %s=%r, using default %d", name, val, default)
+            return default
+
+    @staticmethod
+    def _env_float(name: str, default: float) -> float:
+        val = os.environ.get(name)
+        if val is None or val.strip() == "":
+            return default
+        try:
+            return float(val)
+        except ValueError:
+            log.warning("Invalid float for %s=%r, using default %s", name, val, default)
+            return default
 
     @property
     def sensor_suite(self) -> SensorSuite | None:
@@ -220,6 +272,11 @@ class BaseMujocoTask(ABC):
         self._cumulative_reward = np.zeros(self._env.n_batch)
         self._num_steps_taken = np.zeros(self._env.n_batch, dtype=int)
 
+        # Reset render-gating phase so the first observation of the episode (policy
+        # step 0) renders fresh camera frames and the cadence stays in phase with the
+        # served policy's inference schedule (0, N, 2N, ...). No-op when gating off.
+        self._env.reset_render_gating()
+
         # Action tracking for ActionSensors
         self.last_action = None
         self.action_cache = []
@@ -230,6 +287,12 @@ class BaseMujocoTask(ABC):
         self.success_cache = []
         self._policy_done = False
         self._done_action_received = False
+
+        # Reset early-abort progress tracking
+        self._early_aborted = False
+        self._abort_max_lift = -np.inf
+        self._abort_min_dist = np.inf
+        self._abort_no_progress_steps = 0
 
         # Reset sensors that maintain state
         if self.sensor_suite:
@@ -329,6 +392,12 @@ class BaseMujocoTask(ABC):
         # Update episode step count
         self.episode_step_count += 1
 
+        # Advance the render-gating phase by one policy step. This must happen before
+        # sensor polling below so the camera RGB sensors see the correct policy-step
+        # index when deciding whether to render fresh pixels or reuse the cached frame.
+        # No-op effect when render gating is disabled (MLSPACES_RENDER_EVERY == 1).
+        self._env.advance_render_step()
+
         for robot, action in zip(self._env.robots, actions, strict=True):
             robot.update_control(action)
 
@@ -352,6 +421,11 @@ class BaseMujocoTask(ABC):
         if self._datagen_profiler is not None:
             self._datagen_profiler.end("sensor_polling")
 
+        # Conservative early-abort: update progress tracking and possibly mark the
+        # episode as a doomed failure. No-op unless MLSPACES_EARLY_ABORT is set.
+        if self._early_abort_enabled and not self._early_aborted:
+            self._update_early_abort()
+
         done = np.logical_or(terminated, truncated)
         self._cumulative_reward += np.where(done, 0, reward)
         self._num_steps_taken += np.where(done, 0, 1)
@@ -362,7 +436,77 @@ class BaseMujocoTask(ABC):
         return observation, reward, terminated, truncated, info
 
     def is_done(self) -> NDArray[bool]:
-        return np.logical_or(self.is_terminal(), self.is_timed_out())
+        done = np.logical_or(self.is_terminal(), self.is_timed_out())
+        if self._early_aborted:
+            # Treat an early-abort exactly like a timeout: the episode ends and
+            # judge_success() (evaluated by the runner after the loop) returns False,
+            # so it is recorded as success=False, never errored, never success.
+            done = np.logical_or(done, True)
+        return done
+
+    def _early_abort_signals(self) -> tuple[float, float] | None:
+        """Return ``(lift_height, gripper_to_obj_dist)`` for the early-abort detector.
+
+        ``lift_height`` is the pickup object's height above its start z (meters).
+        ``gripper_to_obj_dist`` is the distance (meters) from the gripper/TCP to the
+        pickup object. Return ``None`` (the default) to disable early-abort for this
+        task type, which keeps non-pick tasks unaffected.
+        """
+        return None
+
+    def _update_early_abort(self) -> None:
+        """Update progress tracking and set ``_early_aborted`` if the episode is dead.
+
+        CONSERVATIVE by construction. An episode is aborted only when, after the
+        warmup (``_abort_min_steps``):
+          (a) the object has NEVER lifted more than ``_abort_lift_eps`` above start, AND
+          (b) there has been NO progress -- neither a new max lift nor a new minimum
+              gripper-to-object distance -- for ``_abort_patience`` consecutive steps.
+        Any step that improves either signal resets the no-progress counter, so an
+        episode that is still making progress is never aborted.
+        """
+        signals = self._early_abort_signals()
+        if signals is None:
+            return
+        lift_height, gripper_to_obj_dist = signals
+
+        # Did this step improve either signal? Small positive margins keep
+        # floating-point jitter from being counted as real "progress".
+        made_progress = False
+        if lift_height > self._abort_max_lift + 1e-4:
+            self._abort_max_lift = lift_height
+            made_progress = True
+        if gripper_to_obj_dist < self._abort_min_dist - 1e-4:
+            self._abort_min_dist = gripper_to_obj_dist
+            made_progress = True
+
+        if made_progress:
+            self._abort_no_progress_steps = 0
+        else:
+            self._abort_no_progress_steps += 1
+
+        # Gate (a): the object must never have been meaningfully lifted.
+        never_lifted = self._abort_max_lift <= self._abort_lift_eps
+        # Gate: enough time elapsed that any real success would already be done.
+        past_warmup = self.episode_step_count >= self._abort_min_steps
+        # Gate (b): stalled for the full patience window.
+        stalled = self._abort_no_progress_steps >= self._abort_patience
+
+        if past_warmup and never_lifted and stalled:
+            self._early_aborted = True
+            house_id = getattr(self.config, "house_id", None)
+            log.info(
+                "MLSPACES_EARLY_ABORT: aborting doomed episode (house=%s) at step %d: "
+                "max_lift=%.4fm <= eps=%.4fm, no progress for %d steps "
+                "(patience=%d, min_steps=%d). Scoring as success=False.",
+                house_id,
+                self.episode_step_count,
+                self._abort_max_lift,
+                self._abort_lift_eps,
+                self._abort_no_progress_steps,
+                self._abort_patience,
+                self._abort_min_steps,
+            )
 
     @property
     def env(self) -> BaseMujocoEnv:

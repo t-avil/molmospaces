@@ -1,5 +1,6 @@
 import gc
 import logging
+import os
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Collection, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -52,6 +53,23 @@ class BaseMujocoEnv(ABC):
         self._segmentation_frame = None
         self._camera_name = "camera"
 
+        # Optional render gating: skip the expensive EGL RGB render on policy steps
+        # where the served policy will not consume fresh pixels (it caches an action
+        # chunk and re-infers only every buffer_length steps). MLSPACES_RENDER_EVERY=N
+        # renders the camera RGB only on policy steps where (step_index % N == 0) and
+        # reuses the last cached frame per camera otherwise. Default 1 = render every
+        # step = unchanged behavior. Only RGB renders are gated; qpos/proprioception
+        # and other non-camera sensors stay fresh every step.
+        try:
+            self._render_every = max(1, int(os.environ.get("MLSPACES_RENDER_EVERY", "1")))
+        except (TypeError, ValueError):
+            self._render_every = 1
+        # Policy-step index within the current episode; reset to 0 each episode so the
+        # render fires on step 0 and stays in phase (0, N, 2N, ...) with policy inference.
+        self._render_policy_step = 0
+        # Per-camera cache of the most recent rendered RGB frame, keyed by camera name.
+        self._rgb_frame_cache: dict[str, np.ndarray] = {}
+
     def is_loaded(self) -> bool:
         """Check if a scene is currently loaded."""
         return self._mj_model is not None
@@ -61,6 +79,25 @@ class BaseMujocoEnv(ABC):
         if not self.is_loaded():
             raise RuntimeError("No scene loaded. Call load_scene() first.")
         return self._mj_model
+
+    def reset_render_gating(self) -> None:
+        """Reset render-gating phase at the start of an episode.
+
+        Sets the policy-step index to 0 so the next RGB render fires on step 0 and
+        stays in phase with policy inference cadence. Clears the per-camera frame
+        cache so no stale frame leaks across episodes. No-op effect when render
+        gating is disabled (MLSPACES_RENDER_EVERY == 1).
+        """
+        self._render_policy_step = 0
+        self._rgb_frame_cache = {}
+
+    def advance_render_step(self) -> None:
+        """Advance the policy-step index by one policy step.
+
+        Called once per policy step (i.e. once per task.step). When render gating is
+        disabled this is a harmless integer increment that nothing reads.
+        """
+        self._render_policy_step += 1
 
     @property
     @abstractmethod
@@ -209,6 +246,17 @@ class CPUMujocoEnv(BaseMujocoEnv):
             width, height = self.config.camera_config.img_resolution
         else:
             width, height = (640, 480)  # Default resolution
+        # #3 speedup: MLSPACES_RENDER_SCALE (default 1.0) uniformly scales the render
+        # resolution (keeps aspect ratio; the policy resizes to 224 anyway). Smaller =
+        # faster render + less VRAM. Off (=1.0) is byte-identical to current behavior.
+        try:
+            _rs = float(os.environ.get("MLSPACES_RENDER_SCALE", "1.0"))
+            if _rs != 1.0 and _rs > 0:
+                width = max(16, int(round(width * _rs / 16)) * 16)   # keep 16-px multiple
+                height = max(16, int(round(height * _rs / 16)) * 16)
+                log.info(f"MLSPACES_RENDER_SCALE={_rs}: render at {width}x{height}")
+        except (TypeError, ValueError):
+            pass
         if HAS_FILAMENT:
             log.info("Using MuJoCo renderer: filament")
             self._renderer = MjFilamentRenderer(model=self.mj_model, width=width, height=height)
@@ -285,14 +333,35 @@ class CPUMujocoEnv(BaseMujocoEnv):
         return frame
 
     def render_rgb_frame(self, camera_name: str) -> np.ndarray:
-        """Renders an RGB frame from the perspective of the specified camera."""
+        """Renders an RGB frame from the perspective of the specified camera.
+
+        When render gating is enabled (MLSPACES_RENDER_EVERY > 1) the expensive EGL
+        render is skipped on policy steps where (policy_step_index % N != 0); the most
+        recently rendered frame for this camera is reused instead. When gating is
+        disabled (default), this is byte-identical to an unconditional render.
+        """
         if camera_name not in self.camera_manager.registry:
             raise KeyError(f"Camera '{camera_name}' not found in registry.")
 
-        camera = self.camera_manager.registry[camera_name]
-        return self._render_frame(
-            camera.pos, camera.forward, camera.up, camera.fov, segmentation=False
+        # Fast path / default: render every step (byte-identical to prior behavior).
+        if self._render_every <= 1:
+            camera = self.camera_manager.registry[camera_name]
+            return self._render_frame(
+                camera.pos, camera.forward, camera.up, camera.fov, segmentation=False
+            )
+
+        # Gated path: reuse cached frame on skipped steps, but always render if we have
+        # no cached frame yet for this camera (e.g. defensively, if step 0 was missed).
+        should_render = (self._render_policy_step % self._render_every == 0) or (
+            camera_name not in self._rgb_frame_cache
         )
+        if should_render:
+            camera = self.camera_manager.registry[camera_name]
+            frame = self._render_frame(
+                camera.pos, camera.forward, camera.up, camera.fov, segmentation=False
+            )
+            self._rgb_frame_cache[camera_name] = frame
+        return self._rgb_frame_cache[camera_name]
 
     def render_depth_frame(self, camera_name: str) -> np.ndarray:
         """Renders a depth frame from the perspective of the specified camera.

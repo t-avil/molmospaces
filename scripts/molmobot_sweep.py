@@ -177,9 +177,12 @@ def launch_shard(mode: str, gpu: int, port: int, bench_dir: Path, out_dir: Path,
         # MLSPACES_PERTURB_SCALE (if set in the parent env) flows through to the sampler;
         # for the fixed-base static modes the sampler ignores it (perturbation is mobile-only).
         env["MLSPACES_MB_PORT"] = str(port)
+        # #1 parallelism: MLSPACES_EVAL_WORKERS concurrent episodes per GPU (one shared
+        # server multiplexes them safely via per-client state save/restore). Default 1.
+        nworkers = os.environ.get("MLSPACES_EVAL_WORKERS", "1")
         cmd = [str(MOBILE_PY), "molmo_spaces/evaluation/eval_main.py", MODE_CFG[mode],
                "--benchmark_dir", str(bench_dir), "--task_horizon_sec", str(horizon),
-               "--no_wandb", "--num_workers", "1", "--output_dir", str(out_dir)]
+               "--no_wandb", "--num_workers", str(nworkers), "--output_dir", str(out_dir)]
         cwd = str(REPO)
     elif mode == "pi_static":
         # MolmoBot-Pi0 in-process on the fixed franka via the PI env runner.

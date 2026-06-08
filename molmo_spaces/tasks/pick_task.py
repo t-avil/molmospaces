@@ -38,6 +38,37 @@ class PickTask(BaseMujocoTask):
         sensors = get_core_sensors(config)
         return SensorSuite(sensors)
 
+    def _early_abort_signals(self) -> tuple[float, float] | None:
+        """Progress signals for the conservative early-abort detector.
+
+        Returns ``(lift_height, gripper_to_obj_dist)`` for env 0:
+          - ``lift_height``: pickup object height above its start z (meters).
+          - ``gripper_to_obj_dist``: min distance over all grippers from the
+            gripper/TCP world position to the pickup object (meters).
+        Returns ``None`` if the signals cannot be computed, which makes the
+        detector a no-op for this step (never a spurious abort).
+        """
+        try:
+            data = self._env.mj_datas[0]
+            pickup_obj = MlSpacesObject(
+                data=data, object_name=self.config.task_config.pickup_obj_name
+            )
+            lift_height = (
+                pickup_obj.position[2] - self.config.task_config.pickup_obj_start_pose[2]
+            )
+
+            gripper_positions = self._env.get_robot_gripper_positions(0)
+            if not gripper_positions:
+                return None
+            gripper_to_obj_dist = min(
+                float(np.linalg.norm(pickup_obj.position - pos))
+                for pos in gripper_positions.values()
+            )
+            return float(lift_height), gripper_to_obj_dist
+        except Exception as e:  # pragma: no cover - defensive; never abort on error
+            log.warning("early_abort_signals unavailable, skipping abort check: %s", e)
+            return None
+
     def judge_success(self) -> bool:
         """Judge if the task was successful (for data generation)."""
 
