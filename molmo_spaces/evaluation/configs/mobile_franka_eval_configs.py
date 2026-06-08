@@ -267,7 +267,7 @@ class FrankaHybridMolmobotStaticEvalConfig(MobileFrankaHybridMolmobotEvalConfig)
     # height (0.09141114843014408 + 0.58) so reach/camera geometry is identical;
     # only the base *dynamics* (welded vs floating) differ.
     robot_config: FrankaRobotConfig = FrankaRobotConfig(
-        base_size=[0.5, 0.5, 0.09141114843014408 + 0.58],
+        base_size=[0.5, 0.5, 0.585],  # match mobile@static arm/camera height (was 0.671: double-counted rbp.z -> +8.64cm viewpoint shift -> pi0.5 0%)
     )
 
     @property
@@ -291,7 +291,7 @@ class FrankaHybridPi05StaticEvalConfig(MobileFrankaHybridPi05EvalConfig):
     """
 
     robot_config: FrankaRobotConfig = FrankaRobotConfig(
-        base_size=[0.5, 0.5, 0.09141114843014408 + 0.58],
+        base_size=[0.5, 0.5, 0.585],  # match mobile@static arm/camera height (was 0.671: double-counted rbp.z -> +8.64cm viewpoint shift -> pi0.5 0%)
     )
 
     @property
