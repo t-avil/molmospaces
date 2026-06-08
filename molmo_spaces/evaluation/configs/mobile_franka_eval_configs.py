@@ -24,6 +24,7 @@ from molmo_spaces.configs.policy_configs import (
 from molmo_spaces.configs.policy_configs_baselines import TeleopPolicyConfig
 from molmo_spaces.configs.robot_configs import (
     ActionNoiseConfig,
+    FrankaRobotConfig,
     MobileFrankaRobotConfig,
 )
 from molmo_spaces.evaluation.configs.evaluation_configs import JsonBenchmarkEvalConfig
@@ -208,3 +209,91 @@ class MobileFrankaHybridMolmobotEvalConfig(MobileFrankaHybridPointGraspEvalConfi
         _port = os.environ.get("MLSPACES_MB_PORT")
         if _port:
             self.policy_config.molmobot_port = int(_port)
+
+
+class MobileFrankaHybridPi05EvalConfig(MobileFrankaHybridPointGraspEvalConfig):
+    """Same hybrid (point -> approach -> grasp), but the GRASP module is a served
+    PURE pi0.5 (Physical Intelligence pi05_droid) VLA instead of molmobot. The served
+    pi0.5 policy speaks the identical websocket protocol (obs {exo_camera_1, wrist_camera,
+    qpos, task} -> {arm, gripper}), so grasp_mode="molmobot" routes to it unchanged; only
+    the served model and the control rate differ. Requires serve_pi05.py on
+    molmobot_host:molmobot_port. Run with MUJOCO_GL=egl.
+    """
+
+    policy_config: HybridPointGraspPolicyConfig = HybridPointGraspPolicyConfig(
+        grasp_mode="molmobot",  # protocol-identical; the served model is pi0.5
+        approach_target="original",  # park at the training base pose to isolate the grasp
+    )
+    policy_dt_ms: float = 66.0  # pi0.5-DROID control rate (vs molmobot's 200 ms)
+
+    @property
+    def tag(self) -> str:
+        return "mobile_franka_hybrid_pi05_json_benchmark"
+
+    def model_post_init(self, __context) -> None:
+        super().model_post_init(__context)
+        os.environ["MLSPACES_HIDE_MOBILE_BASE_VIS"] = "1"
+        _port = os.environ.get("MLSPACES_MB_PORT")
+        if _port:
+            self.policy_config.molmobot_port = int(_port)
+
+
+class FrankaHybridMolmobotStaticEvalConfig(MobileFrankaHybridMolmobotEvalConfig):
+    """TRUE-STATIC counterpart of MobileFrankaHybridMolmobotEvalConfig.
+
+    Same hybrid pipeline (point -> approach -> served-VLA grasp) and the SAME
+    served molmobot grasp module (grasp_mode="molmobot"), but the base is the
+    standard FIXED DROID franka (FrankaRobotConfig), not the floating mobile
+    base. Two consequences make this the apples-to-apples "easiest" cell:
+
+      * Fixed base = a welded mocap base (FrankaFR3BaseGroup, zero actuators).
+        There is NO floating-base contact instability, and the robot sits
+        exactly at the benchmark-authored pose.
+      * JsonEvalTaskSampler only perturbs the base when robot_config is a
+        MobileFrankaRobotConfig, so a fixed FrankaRobotConfig gets NO
+        perturbation at all (independent of MLSPACES_PERTURB_SCALE).
+
+    The hybrid approach phase is a no-op here: HybridPointGraspPolicy detects a
+    non-mobile base (robot_view.base.is_mobile == False) and hands straight to
+    the grasp from the authored pose. So this isolates exactly the served grasp
+    module on the original fixed-base protocol:
+
+        static (this)  >  mobile @ static pose (scale=0)  >  mobile + perturbed
+
+    Run with MUJOCO_GL=egl so exo_camera_1 + wrist_camera render into the obs.
+    """
+
+    # Fixed DROID franka. base_size matches the mobile config's arm-origin world
+    # height (0.09141114843014408 + 0.58) so reach/camera geometry is identical;
+    # only the base *dynamics* (welded vs floating) differ.
+    robot_config: FrankaRobotConfig = FrankaRobotConfig(
+        base_size=[0.5, 0.5, 0.09141114843014408 + 0.58],
+    )
+
+    @property
+    def tag(self) -> str:
+        return "franka_hybrid_molmobot_static_json_benchmark"
+
+    def model_post_init(self, __context) -> None:
+        super().model_post_init(__context)
+        # Fixed base draws no mobile-base column, so the hide-vis hack is moot;
+        # leave it set (harmless) for parity with the mobile config's env.
+
+
+class FrankaHybridPi05StaticEvalConfig(MobileFrankaHybridPi05EvalConfig):
+    """TRUE-STATIC counterpart of MobileFrankaHybridPi05EvalConfig.
+
+    Identical to FrankaHybridMolmobotStaticEvalConfig (fixed DROID franka, no
+    perturbation, approach is a no-op) but the served grasp module is a PURE
+    pi0.5 (pi05_droid) speaking the same websocket protocol, at the pi0.5
+    control rate. Requires serve_pi05.py on molmobot_host:molmobot_port.
+    Run with MUJOCO_GL=egl.
+    """
+
+    robot_config: FrankaRobotConfig = FrankaRobotConfig(
+        base_size=[0.5, 0.5, 0.09141114843014408 + 0.58],
+    )
+
+    @property
+    def tag(self) -> str:
+        return "franka_hybrid_pi05_static_json_benchmark"

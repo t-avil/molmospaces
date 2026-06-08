@@ -171,11 +171,30 @@ class HybridPointGraspPolicy(PickPlannerPolicy):
         #   (3) deproject_pixel_to_world(px, py, depth[py, px], K, E). See cap_policy.py.
         raise NotImplementedError("molmo pointing path: wire RUMClient + exocentric cam obs")
 
+    def _base_is_mobile(self) -> bool:
+        """True only if the base has actuators to drive (the floating mobile
+        base). A fixed DROID franka has a welded mocap base (no actuators), so
+        there is nothing to approach with — the robot already sits at the
+        authored pose. Used to make the approach phase a no-op for the static
+        eval condition."""
+        try:
+            return bool(self.robot_view.base.is_mobile)
+        except Exception:  # noqa: BLE001
+            return False
+
     # ---- approach -----------------------------------------------------------
     def _approach_action(self, observation: Any) -> dict[str, Any] | None:
         """Drive the planar base toward a standoff pose facing the perceived
         point. Returns the base action while approaching, or None when the
-        approach is complete (reached / contact / step cap)."""
+        approach is complete (reached / contact / step cap).
+
+        With a fixed (non-mobile) base there is no base to drive: the robot is
+        already parked at the authored pose, so the approach is an immediate
+        no-op and we hand straight to the grasp. This is what makes the static
+        condition apples-to-apples with mobile@static (same hybrid + grasp
+        handoff, minus the floating base and its perturbation)."""
+        if not self._base_is_mobile():
+            return None
         if self._nav is None:
             self._nav = _NavToPointPolicy(self.config, self.task)
             self._nav.reset()

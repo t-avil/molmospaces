@@ -886,9 +886,15 @@ class JsonEvalTaskSampler(BaseMujocoTaskSampler):
                 & 0xFFFFFFFF
             )
             rng = np.random.RandomState(ep_seed)
-            dx = rng.uniform(-0.5, 0.5)
-            dy = rng.uniform(-0.5, 0.5)
-            dyaw = rng.uniform(-np.pi / 4, np.pi / 4)
+            # MLSPACES_PERTURB_SCALE scales the seeded offset without changing the
+            # random stream: scale=1.0 (default) reproduces the original behaviour,
+            # scale=0.0 starts the episode exactly at the benchmark-authored pose
+            # (the "mobile-at-static-pose" condition). Any positive scale gives a
+            # controlled-magnitude perturbation off the same seed.
+            _pscale = float(os.environ.get("MLSPACES_PERTURB_SCALE", "1.0"))
+            dx = rng.uniform(-0.5, 0.5) * _pscale
+            dy = rng.uniform(-0.5, 0.5) * _pscale
+            dyaw = rng.uniform(-np.pi / 4, np.pi / 4) * _pscale
             perturbed = list(robot_base_pose)
             perturbed[0] += dx
             perturbed[1] += dy

@@ -40,6 +40,7 @@ import glob
 import json
 import logging
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -54,15 +55,43 @@ MOLMOBOT_PY = Path("/tmp/MolmoBot/MolmoBot/.venv/bin/python")
 MOLMOBOT_DIR = Path("/tmp/MolmoBot/MolmoBot")
 CKPT = MOLMOBOT_DIR / "ckpts" / "molmobot" / "MolmoBot-DROID"
 
+# MolmoBot-Pi0 lives in its own env (openpi); checkpoint cached under HF_HOME.
+PI_DIR = Path("/tmp/MolmoBot/MolmoBot-Pi0")
+PI_PY = PI_DIR / ".venv" / "bin" / "python"
+HF_HOME = "/tmp/hf-cache"
+
+
+def pi_ckpt() -> str:
+    import glob
+    snaps = glob.glob(f"{HF_HOME}/hub/models--allenai--MolmoBot-Pi0-DROID/snapshots/*")
+    if not snaps:
+        raise FileNotFoundError("MolmoBot-Pi0-DROID checkpoint not found in HF cache")
+    return sorted(snaps)[-1]
+
+
 MODE_CFG = {
     "mobile": "molmo_spaces.evaluation.configs.mobile_franka_eval_configs:MobileFrankaHybridMolmobotEvalConfig",
+    "pi05_mobile": "molmo_spaces.evaluation.configs.mobile_franka_eval_configs:MobileFrankaHybridPi05EvalConfig",
+    # APPLES-TO-APPLES static cells: SAME molmospaces hybrid harness + SAME served
+    # grasp module as the mobile modes, but on the FIXED DROID franka (no floating
+    # base, no perturbation). These are the correct "easiest" baseline; they are
+    # directly comparable to mobile/pi05_mobile (unlike the standalone-runner
+    # "static"/"pi05_static" modes below, which use a different harness/venv).
+    "molmobot_static": "molmo_spaces.evaluation.configs.mobile_franka_eval_configs:FrankaHybridMolmobotStaticEvalConfig",
+    "pi05_static_hybrid": "molmo_spaces.evaluation.configs.mobile_franka_eval_configs:FrankaHybridPi05StaticEvalConfig",
     "static": "olmo.eval.configure_molmo_spaces:FrankaState8ClampAbsPosConfig",
 }
+
+# Static-hybrid modes that share the served-grasp + molmospaces-harness path with
+# the mobile modes. Centralised so the launch logic stays in one place.
+SERVED_HYBRID_MODES = {"mobile", "pi05_mobile", "molmobot_static", "pi05_static_hybrid"}
+# Of those, which serve molmobot (vs pure pi0.5). Drives launch_server's branch.
+MOLMOBOT_SERVE_MODES = {"mobile", "molmobot_static"}
 
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
-    p.add_argument("--mode", choices=["mobile", "static"], required=True)
+    p.add_argument("--mode", choices=["mobile", "pi05_mobile", "molmobot_static", "pi05_static_hybrid", "static", "pi_static", "pi05_static", "pi_mobile"], required=True)
     p.add_argument("--benchmark_dir", required=True, type=Path)
     p.add_argument("--out", required=True, type=Path)
     p.add_argument("--gpus", default="0,1,2,3", help="comma-separated GPU ids to use")
@@ -114,10 +143,19 @@ def port_open(port: int) -> bool:
         return s.connect_ex(("127.0.0.1", port)) == 0
 
 
-def launch_server(gpu: int, port: int, log_path: Path) -> subprocess.Popen:
+def launch_server(gpu: int, port: int, log_path: Path, mode: str = "mobile") -> subprocess.Popen:
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = str(gpu)
     env["MUJOCO_GL"] = "egl"
+    if mode not in MOLMOBOT_SERVE_MODES:
+        # Serve PURE pi0.5 (pi05_droid) speaking the same websocket protocol as molmo,
+        # so the hybrid grasp client calls it unchanged. Runs in the MolmoBot-Pi0 venv.
+        env["POLICY_SERVER_PORT"] = str(port)
+        env["OPENPI_DATA_HOME"] = "/tmp/openpi-cache"
+        env["HF_HOME"] = HF_HOME
+        cmd = [str(PI_PY), "serve_pi05.py"]
+        return subprocess.Popen(cmd, cwd=str(PI_DIR), env=env,
+                                stdout=open(log_path, "w"), stderr=subprocess.STDOUT)
     cmd = [str(MOLMOBOT_PY), "launch_scripts/serve_molmo.py",
            "--local-path", str(CKPT), "--action-type", "joint_pos", "--port", str(port)]
     return subprocess.Popen(cmd, cwd=str(MOLMOBOT_DIR), env=env,
@@ -131,13 +169,32 @@ def launch_shard(mode: str, gpu: int, port: int, bench_dir: Path, out_dir: Path,
     env["MUJOCO_GL"] = "egl"
     env["PYOPENGL_PLATFORM"] = "egl"
     env["PYTHONUNBUFFERED"] = "1"
-    if mode == "mobile":
-        # served VLA via the molmospaces hybrid; horizon in SECONDS
+    if mode in SERVED_HYBRID_MODES:
+        # served VLA via the molmospaces hybrid; horizon in SECONDS. mobile -> molmobot,
+        # pi05_mobile -> pure pi0.5 (same hybrid + protocol, different served model + dt).
+        # *_static modes use the SAME harness/config family on the FIXED franka, so the
+        # only difference vs the mobile cell is the base (no floating base, no perturbation).
+        # MLSPACES_PERTURB_SCALE (if set in the parent env) flows through to the sampler;
+        # for the fixed-base static modes the sampler ignores it (perturbation is mobile-only).
         env["MLSPACES_MB_PORT"] = str(port)
-        cmd = [str(MOBILE_PY), "molmo_spaces/evaluation/eval_main.py", MODE_CFG["mobile"],
+        cmd = [str(MOBILE_PY), "molmo_spaces/evaluation/eval_main.py", MODE_CFG[mode],
                "--benchmark_dir", str(bench_dir), "--task_horizon_sec", str(horizon),
                "--no_wandb", "--num_workers", "1", "--output_dir", str(out_dir)]
         cwd = str(REPO)
+    elif mode == "pi_static":
+        # MolmoBot-Pi0 in-process on the fixed franka via the PI env runner.
+        env["HF_HOME"] = HF_HOME
+        cmd = [str(PI_PY), "run_pi_static.py", "--benchmark_dir", str(bench_dir),
+               "--ckpt", pi_ckpt(), "--output_dir", str(out_dir),
+               "--task_horizon_sec", str(horizon)]
+        cwd = str(PI_DIR)
+    elif mode == "pi05_static":
+        # PURE pi0.5 (Physical Intelligence pi05_droid) in-process on the fixed franka.
+        env["HF_HOME"] = HF_HOME
+        env["OPENPI_DATA_HOME"] = "/tmp/openpi-cache"
+        cmd = [str(PI_PY), "run_pi05_static.py", "--benchmark_dir", str(bench_dir),
+               "--output_dir", str(out_dir), "--task_horizon_sec", str(horizon)]
+        cwd = str(PI_DIR)
     else:
         # in-process VLA on the fixed DROID franka via MolmoBot's run_eval.py
         # (it injects checkpoint_path into the config). task_horizon is in STEPS;
@@ -155,34 +212,25 @@ def launch_shard(mode: str, gpu: int, port: int, bench_dir: Path, out_dir: Path,
                             stdout=open(log_path, "w"), stderr=subprocess.STDOUT)
 
 
-def collect(out_dir: Path, local_to_id: dict[tuple[int, int], tuple[int, str]],
+_DONE_RE = re.compile(r"house (\d+) episode (\d+).*completed with success=(True|False)")
+
+
+def collect(log_path: Path, local_to_id: dict[tuple[int, int], tuple[int, str]],
             results_log: Path) -> None:
-    """Read success per (house, run-local ordinal) from saved h5, map to the stable
-    src_id, and append. Episodes with no h5 (sampling/setup error) are marked errored."""
-    import h5py
+    """Score by the AUTHORITATIVE pipeline metric (the 'completed with success=' log
+    line), keyed by (house, run-local episode index), mapped to the stable src_id.
+    NOTE: do NOT use the h5 `success` array's .max() — that is a lenient per-step
+    proximity flag and overcounts (it diverged from the official metric by 167/347
+    on the static franka). Episodes with no completion line are marked errored."""
     success_by_local: dict[tuple[int, int], bool] = {}
-    for h5_path in glob.glob(str(out_dir / "*" / "*" / "house_*" / "trajectories_batch_*.h5")):
-        try:
-            h_id = int(Path(h5_path).parent.name.split("_", 1)[1])
-        except Exception:
-            continue
-        try:
-            with h5py.File(h5_path, "r") as fh:
-                for grp_name in fh.keys():
-                    if not grp_name.startswith("traj_"):
-                        continue
-                    try:
-                        e_id = int(grp_name.split("_", 1)[1])
-                    except Exception:
-                        continue
-                    grp = fh[grp_name]
-                    if "success" in grp:
-                        succ = bool(grp["success"][...].max())
-                    else:
-                        succ = bool(grp.attrs.get("success", False))
-                    success_by_local[(h_id, e_id)] = succ
-        except Exception as e:
-            log.warning(f"read fail {h5_path}: {e}")
+    try:
+        with open(log_path, errors="ignore") as fh:
+            for line in fh:
+                m = _DONE_RE.search(line)
+                if m:
+                    success_by_local[(int(m.group(1)), int(m.group(2)))] = (m.group(3) == "True")
+    except FileNotFoundError:
+        pass
     already = {(int(r["house_index"]), str(r["traj_key"])) for r in load_jsonl(results_log)}
     with results_log.open("a") as f:
         for local, sid in local_to_id.items():
@@ -224,13 +272,13 @@ def main() -> None:
             shards[gpus[j % len(gpus)]].append(i)
         shards = {g: idxs for g, idxs in shards.items() if idxs}
 
-        if args.mode == "mobile":
+        if args.mode in SERVED_HYBRID_MODES:
             for g in shards:
                 port = 8000 + g
                 if not port_open(port):
-                    log.info(f"  launching server gpu{g} :{port}")
-                    launch_server(g, port, args.out / f"server_gpu{g}.log")
-            deadline = time.time() + 300
+                    log.info(f"  launching {args.mode} server gpu{g} :{port}")
+                    launch_server(g, port, args.out / f"server_gpu{g}.log", mode=args.mode)
+            deadline = time.time() + 420  # pi0.5 jax/orbax load is slower to come up
             for g in shards:
                 while not port_open(8000 + g) and time.time() < deadline:
                     time.sleep(3)
@@ -242,7 +290,7 @@ def main() -> None:
         out_dirs: dict[int, Path] = {}
         for g, idxs in shards.items():
             port = 8000 + g
-            if args.mode == "mobile" and not port_open(port):
+            if args.mode in SERVED_HYBRID_MODES and not port_open(port):
                 continue
             sb = args.out / f"r{round_id}_gpu{g}_bench"
             write_shard_benchmark(src, idxs, args.benchmark_dir, sb)
@@ -259,7 +307,7 @@ def main() -> None:
         for g, p in procs.items():
             rc = p.wait()
             log.info(f"  shard gpu{g} exit={rc}")
-            collect(out_dirs[g], maps[g], results_log)
+            collect(args.out / f"r{round_id}_gpu{g}.log", maps[g], results_log)
             shutil.rmtree(args.out / f"r{round_id}_gpu{g}_bench", ignore_errors=True)
             if not args.keep_eval_dirs:
                 shutil.rmtree(out_dirs[g], ignore_errors=True)
