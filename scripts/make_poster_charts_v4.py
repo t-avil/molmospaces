@@ -49,12 +49,12 @@ plt.rcParams.update({
 })
 
 SRC = {
-    "mb_static":   REPO / "results/molmobot_sweep/static_results.jsonl",
-    "mb_mobstat":  Path("/tmp/cond2_static_pose/mobile_results.jsonl"),
-    "mb_perturb":  Path("/tmp/cond3_perturbed/mobile_results.jsonl"),
-    "pi_static":   Path("/tmp/pi05_static/pi05_static_results.jsonl"),
-    "pi_mobstat":  Path("/tmp/pi05_mobstatic/pi05_mobile_results.jsonl"),
-    "pi_perturb":  Path("/tmp/pi05_perturbed/pi05_mobile_results.jsonl"),
+    "mb_static":   Path("/tmp/mb_sh/molmobot_static_results.jsonl"),
+    "mb_mobstat":  Path("/tmp/mb_ms/mobile_results.jsonl"),
+    "mb_perturb":  Path("/tmp/mb_pt/mobile_results.jsonl"),
+    "pi_static":   Path("/tmp/pi05_sh/results.jsonl"),
+    "pi_mobstat":  Path("/tmp/pi05_ms/results.jsonl"),
+    "pi_perturb":  Path("/tmp/pi05_pt/results.jsonl"),
 }
 
 
@@ -104,8 +104,9 @@ def star(p):
 # ---- data ------------------------------------------------------------------
 d = {k: load(k) for k in SRC}
 K = {k: kn(v) for k, v in d.items()}
-mb_pairs = radius_pairs("/tmp/cond3_perturbed/r*.log")
-pi_pairs = radius_pairs("/tmp/pi05_perturbed/r*.log")
+mb_pairs = radius_pairs("/tmp/mb_pt/r*.log")  # NEW full-347 MolmoBot perturbed run (origpose)
+pi_pairs = (radius_pairs("/tmp/pi05_pt/r*.log") + radius_pairs("/tmp/pi05_pert2/r*.log")
+            + radius_pairs("/tmp/pi05_pt3/r*.log") + radius_pairs("/tmp/pi05_pt4/r*.log"))
 print({k: f"{v[0]}/{v[1]}" for k, v in K.items()}, "mb_pairs", len(mb_pairs), "pi_pairs", len(pi_pairs))
 
 CONDS = ["Static base\n(fixed-base protocol)",
@@ -200,7 +201,7 @@ ax.spines[["top", "right"]].set_visible(False)
 fig.text(0.5, -0.05,
          "Per-bin Wilson CIs; radius from the exact per-episode offset (single random draw, binned post-hoc — "
          "not a controlled sweep; max realized 0.66 m). Scripted holds 100% at every radius, so MolmoBot's drop "
-         "is policy failure not infeasibility; pi0.5 is floored independent of radius.",
+         "is policy failure not infeasibility; pi0.5 is uniformly low (~20%), roughly flat across radius.",
          ha="center", va="top", fontsize=9.2, family="DejaVu Sans Mono", color="#333")
 fig.savefig(OUT / "chart2_success_vs_radius.png"); plt.close(fig)
 
