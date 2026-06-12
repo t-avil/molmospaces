@@ -79,19 +79,27 @@ MODE_CFG = {
     # "static"/"pi05_static" modes below, which use a different harness/venv).
     "molmobot_static": "molmo_spaces.evaluation.configs.mobile_franka_eval_configs:FrankaHybridMolmobotStaticEvalConfig",
     "pi05_static_hybrid": "molmo_spaces.evaluation.configs.mobile_franka_eval_configs:FrankaHybridPi05StaticEvalConfig",
+    # MolmoBot-Pi0-DROID (pi0-architecture MolmoBot variant) served over the SAME
+    # websocket protocol as pi0.5; reuse the pi05 hybrid eval configs verbatim, only
+    # the served model differs (serve_mbpi0.py vs serve_pi05.py).
+    "mbpi0_mobile": "molmo_spaces.evaluation.configs.mobile_franka_eval_configs:MobileFrankaHybridPi05EvalConfig",
+    "mbpi0_static_hybrid": "molmo_spaces.evaluation.configs.mobile_franka_eval_configs:FrankaHybridPi05StaticEvalConfig",
     "static": "olmo.eval.configure_molmo_spaces:FrankaState8ClampAbsPosConfig",
 }
 
 # Static-hybrid modes that share the served-grasp + molmospaces-harness path with
 # the mobile modes. Centralised so the launch logic stays in one place.
-SERVED_HYBRID_MODES = {"mobile", "pi05_mobile", "molmobot_static", "pi05_static_hybrid"}
+SERVED_HYBRID_MODES = {"mobile", "pi05_mobile", "molmobot_static", "pi05_static_hybrid",
+                       "mbpi0_mobile", "mbpi0_static_hybrid"}
 # Of those, which serve molmobot (vs pure pi0.5). Drives launch_server's branch.
 MOLMOBOT_SERVE_MODES = {"mobile", "molmobot_static"}
+# Which serve MolmoBot-Pi0-DROID (serve_mbpi0.py instead of serve_pi05.py).
+MBPI0_SERVE_MODES = {"mbpi0_mobile", "mbpi0_static_hybrid"}
 
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
-    p.add_argument("--mode", choices=["mobile", "pi05_mobile", "molmobot_static", "pi05_static_hybrid", "static", "pi_static", "pi05_static", "pi_mobile"], required=True)
+    p.add_argument("--mode", choices=["mobile", "pi05_mobile", "molmobot_static", "pi05_static_hybrid", "static", "pi_static", "pi05_static", "pi_mobile", "mbpi0_mobile", "mbpi0_static_hybrid"], required=True)
     p.add_argument("--benchmark_dir", required=True, type=Path)
     p.add_argument("--out", required=True, type=Path)
     p.add_argument("--gpus", default="0,1,2,3", help="comma-separated GPU ids to use")
@@ -153,7 +161,8 @@ def launch_server(gpu: int, port: int, log_path: Path, mode: str = "mobile") -> 
         env["POLICY_SERVER_PORT"] = str(port)
         env["OPENPI_DATA_HOME"] = "/tmp/openpi-cache"
         env["HF_HOME"] = HF_HOME
-        cmd = [str(PI_PY), "serve_pi05.py"]
+        serve_script = "serve_mbpi0.py" if mode in MBPI0_SERVE_MODES else "serve_pi05.py"
+        cmd = [str(PI_PY), serve_script]
         return subprocess.Popen(cmd, cwd=str(PI_DIR), env=env,
                                 stdout=open(log_path, "w"), stderr=subprocess.STDOUT)
     cmd = [str(MOLMOBOT_PY), "launch_scripts/serve_molmo.py",

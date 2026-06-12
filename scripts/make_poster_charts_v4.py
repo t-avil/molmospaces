@@ -38,6 +38,7 @@ OUT = REPO / "results/molmobot_sweep/charts_v4"
 OUT.mkdir(parents=True, exist_ok=True)
 
 C_MOLMO, C_PI, C_SCRIPT = "#e76f51", "#9b5de5", "#264653"
+C_MBPI0 = "#2a9d8f"  # MolmoBot-Pi0-DROID (pi0-architecture MolmoBot variant)
 GRID = "#dcdcdc"
 plt.rcParams.update({
     "font.family": "DejaVu Sans", "font.size": 12.5,
@@ -55,6 +56,9 @@ SRC = {
     "pi_static":   Path("/tmp/pi05_sh/results.jsonl"),
     "pi_mobstat":  Path("/tmp/pi05_ms/results.jsonl"),
     "pi_perturb":  Path("/tmp/pi05_pt/results.jsonl"),
+    "mbpi0_static":  Path("/tmp/mbpi0_sh/mbpi0_static_hybrid_results.jsonl"),
+    "mbpi0_mobstat": Path("/tmp/mbpi0_ms/mbpi0_mobile_results.jsonl"),
+    "mbpi0_perturb": Path("/tmp/mbpi0_pt/mbpi0_mobile_results.jsonl"),
 }
 
 
@@ -105,6 +109,7 @@ def star(p):
 d = {k: load(k) for k in SRC}
 K = {k: kn(v) for k, v in d.items()}
 mb_pairs = radius_pairs("/tmp/mb_pt/r*.log")  # NEW full-347 MolmoBot perturbed run (origpose)
+mbpi0_pairs = radius_pairs("/tmp/mbpi0_pt/r*.log")  # MolmoBot-Pi0 perturbed run (origpose)
 pi_pairs = (radius_pairs("/tmp/pi05_pt/r*.log") + radius_pairs("/tmp/pi05_pert2/r*.log")
             + radius_pairs("/tmp/pi05_pt3/r*.log") + radius_pairs("/tmp/pi05_pt4/r*.log"))
 print({k: f"{v[0]}/{v[1]}" for k, v in K.items()}, "mb_pairs", len(mb_pairs), "pi_pairs", len(pi_pairs))
@@ -114,6 +119,7 @@ CONDS = ["Static base\n(fixed-base protocol)",
          "Mobile + perturbed\n(+ viewpoint / approach)"]
 # module -> [(k,n) per condition]
 MB = [K["mb_static"], K["mb_mobstat"], K["mb_perturb"]]
+MBPI0 = [K["mbpi0_static"], K["mbpi0_mobstat"], K["mbpi0_perturb"]]
 PI = [K["pi_static"], K["pi_mobstat"], K["pi_perturb"]]
 
 # ===========================================================================
@@ -121,7 +127,8 @@ PI = [K["pi_static"], K["pi_mobstat"], K["pi_perturb"]]
 # ===========================================================================
 fig, ax = plt.subplots(figsize=(12.5, 6.8))
 nC = 3
-gw = 0.82; bw = gw / 3
+NBARS = 4
+gw = 0.86; bw = gw / NBARS
 xb = np.arange(nC)
 def bars(offset, series, color, label, ceiling=False):
     for ci in range(nC):
@@ -140,12 +147,13 @@ def bars(offset, series, color, label, ceiling=False):
         ax.text(x, hi * 100 + 1.6, f"{p*100:.0f}%", ha="center", va="bottom", fontsize=10, fontweight="bold")
         ax.text(x, max(3.5, p * 100 - 7), f"{k}/{n}", ha="center", va="center", fontsize=8, color="white", fontweight="bold")
 bars(0, MB, C_MOLMO, "MolmoBot (served VLA)")
-bars(1, PI, C_PI, "pi0.5 (pi05_droid, served)")
-bars(2, None, C_SCRIPT, "Scripted IK (oracle ceiling)", ceiling=True)
+bars(1, MBPI0, C_MBPI0, "MolmoBot-Pi0 (pi0-arch, served)")
+bars(2, PI, C_PI, "pi0.5 (pi05_droid, served)")
+bars(3, None, C_SCRIPT, "Scripted IK (oracle ceiling)", ceiling=True)
 ax.set_xticks(xb); ax.set_xticklabels(CONDS, fontsize=11.5)
 ax.set_ylabel("Pick success rate (%)"); ax.set_ylim(0, 116); ax.set_yticks(range(0, 101, 20))
 ax.set_title("Pick success by condition and module")
-ax.legend(loc="upper center", bbox_to_anchor=(0.5, 1.0), ncol=3, frameon=False, fontsize=11)
+ax.legend(loc="upper center", bbox_to_anchor=(0.5, 1.0), ncol=4, frameon=False, fontsize=10.5)
 ax.grid(axis="y", color=GRID, lw=0.8, zorder=0); ax.set_axisbelow(True)
 ax.spines[["top", "right"]].set_visible(False)
 # stats panel
@@ -169,7 +177,7 @@ def binned(pairs):
         for i in range(len(edges) - 1):
             if edges[i] <= r < edges[i + 1]: b[i][1] += 1; b[i][0] += int(s); break
     return b
-mbb, pib = binned(mb_pairs), binned(pi_pairs)
+mbb, pib, mbpi0b = binned(mb_pairs), binned(pi_pairs), binned(mbpi0_pairs)
 fig, ax = plt.subplots(figsize=(12.5, 6.8))
 ax.plot([0, 0.72], [100, 100], "-", color=C_SCRIPT, lw=2.4, marker="s", ms=7, markevery=[0, 1],
         label="Scripted IK (feasibility ceiling)", zorder=3)
@@ -186,6 +194,14 @@ if mb_pairs:
                 fmt="o", color=C_MOLMO, ms=7, elinewidth=1.5, capsize=4, zorder=6)
     for x, p, i in zip(mids, mp, range(4)):
         ax.annotate(f"n={mbb[i][1]}", (x, p), textcoords="offset points", xytext=(0, -20), ha="center", fontsize=9, color="#7a2f1c")
+# MolmoBot-Pi0 line (binned, sits between MolmoBot and pi0.5)
+qp = [wilson(mbpi0b[i][0], mbpi0b[i][1])[0] * 100 if mbpi0b[i][1] else None for i in range(4)]
+qmask = [(m, v, mbpi0b[i][1]) for i, (m, v) in enumerate(zip(mids, qp)) if v is not None]
+if qmask:
+    ax.plot([m for m, v, n in qmask], [v for m, v, n in qmask], "-o", color=C_MBPI0, lw=2.4, ms=7,
+            label="MolmoBot-Pi0 (served grasp module)", zorder=6)
+    for m, v, n in qmask:
+        ax.annotate(f"n={n}", (m, v), textcoords="offset points", xytext=(0, 11), ha="center", fontsize=8.5, color="#1d6f63")
 # pi0.5 line (flat ~0)
 pp = [wilson(pib[i][0], pib[i][1])[0] * 100 if pib[i][1] else None for i in range(4)]
 pmask = [(m, v, pib[i][1]) for i, (m, v) in enumerate(zip(mids, pp)) if v is not None]
@@ -211,15 +227,19 @@ fig.savefig(OUT / "chart2_success_vs_radius.png"); plt.close(fig)
 fig, ax = plt.subplots(figsize=(11, 6.8))
 xs = [0, 1, 2]
 for series, color, lab in [(MB, C_MOLMO, "MolmoBot (served VLA)"),
+                           (MBPI0, C_MBPI0, "MolmoBot-Pi0 (pi0-arch, served)"),
                            (PI, C_PI, "pi0.5 (pi05_droid, served)")]:
     ys = [wilson(k, n)[0] * 100 for k, n in series]
     los = [(wilson(k, n)[0] - wilson(k, n)[1]) * 100 for k, n in series]
     his = [(wilson(k, n)[2] - wilson(k, n)[0]) * 100 for k, n in series]
     ax.errorbar(xs, ys, yerr=[los, his], color=color, lw=2.6, marker="o", ms=10, capsize=5,
                 elinewidth=1.5, label=lab, zorder=5)
+    dy = {C_MOLMO: 12, C_MBPI0: 12, C_PI: -24}[color]
+    ha = {C_MOLMO: "right", C_MBPI0: "left", C_PI: "center"}[color]
     for x, y, (k, n) in zip(xs, ys, series):
         ax.annotate(f"{y:.0f}%\n{k}/{n}", (x, y), textcoords="offset points",
-                    xytext=(0, 12 if color == C_MOLMO else -24), ha="center", fontsize=9.5, fontweight="bold", color=color)
+                    xytext=(-6 if ha == "right" else (6 if ha == "left" else 0), dy),
+                    ha=ha, fontsize=9.0, fontweight="bold", color=color)
 ax.plot(xs, [100, 100, 100], "-s", color=C_SCRIPT, lw=2.4, ms=9, label="Scripted IK (oracle ceiling)", zorder=4)
 ax.text(2.02, 100, "100%", va="center", fontsize=9.5, color=C_SCRIPT, fontweight="bold")
 ax.set_xticks(xs); ax.set_xticklabels(["Static base\n(fixed-base)", "Mobile @\nstatic pose", "Mobile +\nperturbed"], fontsize=12)
