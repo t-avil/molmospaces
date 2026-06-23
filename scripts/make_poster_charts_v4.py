@@ -198,16 +198,24 @@ if mb_pairs:
 qp = [wilson(mbpi0b[i][0], mbpi0b[i][1])[0] * 100 if mbpi0b[i][1] else None for i in range(4)]
 qmask = [(m, v, mbpi0b[i][1]) for i, (m, v) in enumerate(zip(mids, qp)) if v is not None]
 if qmask:
-    ax.plot([m for m, v, n in qmask], [v for m, v, n in qmask], "-o", color=C_MBPI0, lw=2.4, ms=7,
-            label="MolmoBot-Pi0 (served grasp module)", zorder=6)
+    qx = [m for m, v, n in qmask]; qy = [v for m, v, n in qmask]
+    qlo = [wilson(mbpi0b[i][0], mbpi0b[i][1])[1] * 100 for i in range(4) if mbpi0b[i][1]]
+    qhi = [wilson(mbpi0b[i][0], mbpi0b[i][1])[2] * 100 for i in range(4) if mbpi0b[i][1]]
+    ax.plot(qx, qy, "-", color=C_MBPI0, lw=2.4, label="MolmoBot-Pi0 (served grasp module)", zorder=6)
+    ax.errorbar(qx, qy, yerr=[[p - l for p, l in zip(qy, qlo)], [h - p for p, h in zip(qy, qhi)]],
+                fmt="o", color=C_MBPI0, ms=7, elinewidth=1.5, capsize=4, zorder=7)
     for m, v, n in qmask:
         ax.annotate(f"n={n}", (m, v), textcoords="offset points", xytext=(0, 11), ha="center", fontsize=8.5, color="#1d6f63")
 # pi0.5 line (flat ~0)
 pp = [wilson(pib[i][0], pib[i][1])[0] * 100 if pib[i][1] else None for i in range(4)]
 pmask = [(m, v, pib[i][1]) for i, (m, v) in enumerate(zip(mids, pp)) if v is not None]
 if pmask:
-    ax.plot([m for m, v, n in pmask], [v for m, v, n in pmask], "-D", color=C_PI, lw=2.2, ms=7,
-            label="pi0.5 (served grasp module)", zorder=6)
+    px = [m for m, v, n in pmask]; py = [v for m, v, n in pmask]
+    plo = [wilson(pib[i][0], pib[i][1])[1] * 100 for i in range(4) if pib[i][1]]
+    phi = [wilson(pib[i][0], pib[i][1])[2] * 100 for i in range(4) if pib[i][1]]
+    ax.plot(px, py, "-", color=C_PI, lw=2.2, label="pi0.5 (served grasp module)", zorder=6)
+    ax.errorbar(px, py, yerr=[[p - l for p, l in zip(py, plo)], [h - p for p, h in zip(py, phi)]],
+                fmt="D", color=C_PI, ms=7, elinewidth=1.5, capsize=4, zorder=7)
 ax.set_xlabel(r"Base-perturbation radius  $r=\sqrt{dx^2+dy^2}$  (m, realized single offset)")
 ax.set_ylabel("Pick success rate (%)"); ax.set_ylim(-3, 108); ax.set_xlim(-0.02, 0.72); ax.set_yticks(range(0, 101, 20))
 ax.set_title("Pick success vs. base-perturbation radius")

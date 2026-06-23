@@ -63,3 +63,4 @@ curate_out_*/*.live*
 
 # transient molmobot eval logs at repo root
 /*.log
+results/molmobot_sweep/charts_v4/*_withband.bak.png
